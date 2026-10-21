@@ -10,7 +10,7 @@ import time
 import numpy as np
 
 from asr import Recognizer
-from guard import accept_polished, novelty, tokens
+from guard import check, novelty, tokens
 from lexicon import Lexicon
 from polish import Polisher
 from prompts import build_system_prompt, user_message
@@ -41,16 +41,18 @@ class Pipeline:
         self.polisher = None
         if cfg["polish"]:
             status("加载整理模型…")
-            self.polisher = Polisher(cfg["llm_model"], self._system_prompt())
+            self.polisher = Polisher(cfg["llm_model"], self._system_prompt(),
+                                     extra_prompts={"minimal": self._system_prompt(minimal=True)})
 
-    def _system_prompt(self) -> str:
-        return build_system_prompt(self.lexicon.terms, self.lexicon.examples, self.lexicon.misheard)
+    def _system_prompt(self, minimal: bool = False) -> str:
+        return build_system_prompt(self.lexicon.terms, self.lexicon.examples, self.lexicon.misheard, minimal=minimal)
 
     def reload_lexicon(self, lexicon: Lexicon) -> None:
         self.lexicon = lexicon
         self.allowed = {t for term in lexicon.terms for t in tokens(term)}
         self.asr.set_hotwords(lexicon.hotwords)
         if self.polisher:
+            self.polisher.set_system_prompt(self._system_prompt(minimal=True), "minimal")
             self.polisher.set_system_prompt(self._system_prompt())
 
     def lexicon_changed(self, path: str) -> bool:
@@ -123,12 +125,18 @@ class Pipeline:
             r = self.polisher.polish(user_message(fixed, session.app_name), source=fixed, prior=session.prior)
             timings.update(polish_prefill=round(r.prefill_s, 3), polish_gen=round(r.gen_s, 3),
                            polish_tokens=r.tokens, polish_steps=r.steps, prior=bool(session.prior))
-            if r.complete and accept_polished(fixed, r.text, self.allowed):
-                text = self.lexicon.apply(r.text)
-            else:
-                timings["polish_rejected"] = True
+            why = check(fixed, r.text, self.allowed) if r.complete else "incomplete"
+            if why:
                 # Never log dictated text; history (if enabled) has it.
-                log.warning("post-edit rejected: %d -> %d chars, complete=%s, novelty %.2f",
-                            len(fixed), len(r.text), r.complete, novelty(fixed, r.text, self.allowed))
+                log.warning("post-edit rejected (%s): %d -> %d chars, novelty %.2f; retrying minimal edit",
+                            why, len(fixed), len(r.text), novelty(fixed, r.text, self.allowed))
+                timings["polish_rejected"] = why
+                r = self.polisher.polish(user_message(fixed, session.app_name), source=fixed, prompt="minimal")
+                timings["minimal_gen"] = round(r.gen_s, 3)
+                why = check(fixed, r.text, self.allowed) if r.complete else "incomplete"
+                if why:
+                    timings["minimal_rejected"] = why
+            if not why:
+                text = self.lexicon.apply(r.text)
         timings["total_engine"] = round(time.perf_counter() - t0, 3)
         return {"text": text, "raw": raw, "timings": timings}

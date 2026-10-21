@@ -54,6 +54,7 @@ final class AppController: NSObject, NSApplicationDelegate {
         recorder.onChunk = { [weak self] samples in self?.sendAudio(samples) }
         hotkey.onAction = { [weak self] action in self?.handleHotkey(action) }
         hotkey.start()
+        if !hotkey.comboRegistered { NSLog("DaziLow: ⌃⌥Space is taken by another app") }
 
         requestPermissions()
         enableLaunchAtLoginOnce()
@@ -86,7 +87,9 @@ final class AppController: NSObject, NSApplicationDelegate {
 
     private func updatePermissionLine() {
         permissionLine.isHidden = axTrusted
-        permissionLine.title = "未开辅助功能：只能用 ⌥Space，结果需手动 ⌘V（点此打开设置）"
+        permissionLine.title = hotkey.comboRegistered
+            ? "未开辅助功能：只能用 ⌃⌥Space，结果需手动 ⌘V（点此打开设置）"
+            : "未开辅助功能：快捷键不可用（点此打开设置）"
     }
 
     private func enableLaunchAtLoginOnce() {
@@ -299,7 +302,7 @@ final class AppController: NSObject, NSApplicationDelegate {
         menu.addItem(statusLine)
         permissionLine.target = self
         menu.addItem(permissionLine)
-        let help = NSMenuItem(title: "按住右侧 ⌥ 或 ⌥Space 说话，松开插入；轻点为免提，Esc 取消", action: nil, keyEquivalent: "")
+        let help = NSMenuItem(title: "按住右侧 ⌥（或 ⌃⌥Space）说话，松开插入；轻点为免提，Esc 取消", action: nil, keyEquivalent: "")
         help.isEnabled = false
         menu.addItem(help)
         menu.addItem(.separator())

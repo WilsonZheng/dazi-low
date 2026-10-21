@@ -35,13 +35,16 @@ class PolishResult:
 
 class Polisher:
     def __init__(self, model_path: str, system_prompt: str, max_tokens: int = 2048,
-                 draft_len: int = 4, prior_draft_len: int = 12, lookup: bool = True):
+                 draft_len: int = 4, prior_draft_len: int = 12, lookup: bool = True,
+                 extra_prompts: dict[str, str] | None = None):
         self.model, self.tok = load(model_path)
         self.max_tokens = max_tokens
         self.draft_len = draft_len
         self.prior_draft_len = prior_draft_len
         self.lookup = lookup
         self.eos = set(getattr(self.tok, "eos_token_ids", None) or [self.tok.eos_token_id])
+        for name, prompt in (extra_prompts or {}).items():
+            self.set_system_prompt(prompt, name)
         self.set_system_prompt(system_prompt)
 
     # ---------- prompt / cache ----------
@@ -53,28 +56,33 @@ class Polisher:
         except TypeError:
             return self.tok.apply_chat_template(msgs, tokenize=False, add_generation_prompt=True)
 
-    def set_system_prompt(self, system_prompt: str) -> None:
+    def set_system_prompt(self, system_prompt: str, name: str = "default") -> None:
+        """Prefills and keeps the cache for one system prompt; several can coexist."""
         rendered = self._render(system_prompt, _SPLIT)
         prefix, self._suffix_tpl = rendered.split(_SPLIT)
-        self._prefix_ids = self.tok.encode(prefix, add_special_tokens=False)
+        prefix_ids = self.tok.encode(prefix, add_special_tokens=False)
         cache = make_prompt_cache(self.model)
         self.hybrid = any(isinstance(c, ArraysCache) for c in cache)
-        ids = mx.array(self._prefix_ids)
-        for i in range(0, len(self._prefix_ids), 1024):
+        ids = mx.array(prefix_ids)
+        for i in range(0, len(prefix_ids), 1024):
             self.model(ids[i : i + 1024][None], cache=cache)
             mx.eval([c.state for c in cache])
-        self._prefix_cache = cache
+        if not hasattr(self, "_caches"):
+            self._caches = {}
+        self._caches[name] = cache
+        if name == "default":
+            self._prefix_ids = prefix_ids
 
-    def _fresh_cache(self):
+    def _fresh_cache(self, name: str = "default"):
         fresh = make_prompt_cache(self.model)
-        for new, old in zip(fresh, self._prefix_cache):
+        for new, old in zip(fresh, self._caches[name]):
             _copy_into(new, old)
         return fresh
 
     # ---------- generation ----------
 
     def polish(self, user_message: str, source: str | None = None, prior: str | None = None,
-               should_stop: Callable[[], bool] | None = None) -> PolishResult:
+               should_stop: Callable[[], bool] | None = None, prompt: str = "default") -> PolishResult:
         """`source` is the transcript the output mostly copies; `prior` is an earlier
         post-edit of a prefix of it (made while the user was still talking), which is
         the best draft for the opening of the output. `should_stop` aborts early."""
@@ -85,7 +93,7 @@ class Polisher:
             sources.insert(0, (self.tok.encode(prior, add_special_tokens=False), self.prior_draft_len))
         # Edits never grow much: logged outputs stay under 1.18x the transcript tokens.
         limit = min(self.max_tokens, int(1.3 * len(src)) + 32)
-        cache = self._fresh_cache()
+        cache = self._fresh_cache(prompt)
         t0 = time.perf_counter()
         logits = self.model(mx.array(ids)[None], cache=cache)
         y = int(mx.argmax(logits[0, -1]).item())

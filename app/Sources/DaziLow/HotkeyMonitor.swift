@@ -3,7 +3,7 @@ import Carbon.HIToolbox
 
 /// Feeds `HotkeyStateMachine` from two sources:
 /// - Right Option alone, via NSEvent monitors (needs the Accessibility permission).
-/// - ⌥Space, via a Carbon hot key, which works without any permission, so dictation
+/// - ⌃⌥Space, via a Carbon hot key, which works without any permission, so dictation
 ///   still works (copy-to-clipboard mode) before Accessibility is granted.
 final class HotkeyMonitor {
     private static let rightOptionKeyCode: UInt16 = 61
@@ -90,7 +90,10 @@ final class HotkeyMonitor {
         }
     }
 
-    // MARK: - ⌥Space via Carbon (no permission needed)
+    // MARK: - ⌃⌥Space via Carbon (no permission needed)
+
+    /// False if another app already owns the combo.
+    private(set) var comboRegistered = false
 
     private func registerCombo() {
         var spec = [EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed)),
@@ -103,7 +106,9 @@ final class HotkeyMonitor {
             return noErr
         }, 2, &spec, me, &handlerRef)
         let id = EventHotKeyID(signature: OSType(0x445A_4C57), id: 1) // "DZLW"
-        RegisterEventHotKey(UInt32(kVK_Space), UInt32(optionKey), id, GetApplicationEventTarget(), 0, &hotKeyRef)
+        // ⌥Space is often taken (Claude desktop quick entry, launchers); ⌃Space switches input sources.
+        comboRegistered = RegisterEventHotKey(UInt32(kVK_Space), UInt32(optionKey | controlKey), id,
+                                              GetApplicationEventTarget(), 0, &hotKeyRef) == noErr
     }
 
     private func handleCombo(pressed: Bool) {
