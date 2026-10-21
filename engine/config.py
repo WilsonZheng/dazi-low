@@ -7,7 +7,7 @@ import os
 
 DEFAULTS = {
     "asr_model": "mlx-community/Qwen3-ASR-1.7B-8bit",
-    "llm_model": "mlx-community/Qwen3.5-9B-MLX-4bit",
+    "llm_model": "mlx-community/Qwen3-8B-4bit",
     "polish": True,
     "hotwords_max": 300,
     "incremental": True,
