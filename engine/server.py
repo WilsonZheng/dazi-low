@@ -32,7 +32,7 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from config import load_config  # noqa: E402
-from lexicon import Lexicon  # noqa: E402
+from lexicon import Lexicon, learned_path, record_learned  # noqa: E402
 from pipeline import Pipeline  # noqa: E402
 from segmenter import Segmenter  # noqa: E402
 
@@ -57,6 +57,7 @@ class Session:
         self.pending = ""
         self.chunked = 0
         self.chunk_timings: dict = {}
+        self.context = ""                       # text near the cursor, for terms only
         self.ended = False
         self.cancelled = False
 
@@ -80,6 +81,7 @@ class Server:
         self.sessions: dict[str, Session] = {}
         self.loop: asyncio.AbstractEventLoop | None = None
         self.last_gpu = time.time()
+        self._finishing: set[asyncio.Task] = set()
 
     # ---------- GPU queue ----------
 
@@ -118,7 +120,9 @@ class Server:
         os.chmod(self.socket_path, 0o600)
         log.info("listening on %s", self.socket_path)
         self.submit(self._load)
-        asyncio.ensure_future(self._watch_lexicon())
+        # Keep a reference: asyncio holds tasks weakly, and an unreferenced one can be
+        # garbage-collected mid-flight (the watcher silently never ran).
+        self._watcher = asyncio.ensure_future(self._watch_lexicon())
         async with server:
             await server.serve_forever()
 
@@ -145,9 +149,10 @@ class Server:
                 continue
             try:
                 if p.lexicon_changed(self.lexicon_path):
+                    log.info("lexicon changed; reloading")
                     def reload():
-                        p.reload_lexicon(Lexicon.load(self.lexicon_path, self.cfg["hotwords_max"]))
-                        log.info("lexicon reloaded: %d terms", len(p.lexicon.terms))
+                        p.reload_lexicon(Lexicon.load(self.lexicon_path, self.cfg["hotwords_max"]),
+                                         should_stop=lambda: bool(self.sessions))
                     await asyncio.wrap_future(self.submit(reload))
             except Exception:
                 log.exception("lexicon reload failed; keeping the previous one")
@@ -195,6 +200,7 @@ class Server:
             self._send(writer, {"type": "status", "ready": self.ready, "text": self.status_text})
         elif kind == "begin" and sid:
             self.sessions[sid] = Session(sid, msg.get("app", ""), msg.get("app_name", ""), self.cfg["segment"], writer)
+            self.sessions[sid].context = str(msg.get("context", ""))[:1000]
             if self.pipeline and self.ready and time.time() - self.last_gpu > 30:
                 self.submit(self._touch)
         elif kind == "audio" and sid in self.sessions:
@@ -209,12 +215,18 @@ class Server:
                 s.segments.append((start, cut, fut))
                 if self.cfg["chunked"]:
                     self.submit(self._advance_chunks, s)
+        elif kind == "learn":
+            pairs = [(str(p.get("from", "")), str(p.get("to", ""))) for p in msg.get("pairs", []) if isinstance(p, dict)]
+            items = record_learned(learned_path(self.lexicon_path), pairs)
+            log.info("learned %d correction(s); %d known", len(pairs), len(items))  # never the words themselves
         elif kind == "cancel" and sid in self.sessions:
             self._cancel(self.sessions.pop(sid))
         elif kind == "end" and sid in self.sessions:
             s = self.sessions.pop(sid)
             s.ended = True
-            asyncio.ensure_future(self.finish(s))
+            task = asyncio.ensure_future(self.finish(s))
+            self._finishing.add(task)
+            task.add_done_callback(self._finishing.discard)
 
     def _touch(self) -> None:
         try:

@@ -57,22 +57,26 @@ class Polisher:
         except TypeError:
             return self.tok.apply_chat_template(msgs, tokenize=False, add_generation_prompt=True)
 
-    def set_system_prompt(self, system_prompt: str, name: str = "default") -> None:
-        """Prefills and keeps the cache for one system prompt; several can coexist."""
+    def set_system_prompt(self, system_prompt: str, name: str = "default", should_stop=None) -> bool:
+        """Prefills and keeps the cache for one system prompt; several can coexist.
+        Returns False (keeping the old cache) if `should_stop` interrupts the prefill."""
         rendered = self._render(system_prompt, _SPLIT)
         prefix, self._suffix_tpl = rendered.split(_SPLIT)
         prefix_ids = self.tok.encode(prefix, add_special_tokens=False)
         cache = make_prompt_cache(self.model)
         self.hybrid = any(isinstance(c, ArraysCache) for c in cache)
         ids = mx.array(prefix_ids)
-        for i in range(0, len(prefix_ids), 1024):
-            self.model(ids[i : i + 1024][None], cache=cache)
+        for i in range(0, len(prefix_ids), 512):
+            if should_stop and should_stop():
+                return False
+            self.model(ids[i : i + 512][None], cache=cache)
             mx.eval([c.state for c in cache])
         if not hasattr(self, "_caches"):
             self._caches = {}
         self._caches[name] = cache
         if name == "default":
             self._prefix_ids = prefix_ids
+        return True
 
     def _fresh_cache(self, name: str = "default"):
         fresh = make_prompt_cache(self.model)

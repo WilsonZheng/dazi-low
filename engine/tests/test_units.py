@@ -124,6 +124,22 @@ class LexiconTest(unittest.TestCase):
         self.assertEqual(lex.apply("x"), "x")
 
 
+class LearnTest(unittest.TestCase):
+    def test_learned_corrections_become_hints_then_rules(self):
+        from lexicon import learned_path, record_learned
+        d = tempfile.mkdtemp()
+        lex_path = os.path.join(d, "lexicon.json")
+        with open(lex_path, "w") as f:
+            json.dump({"terms": ["Vello"], "replacements": []}, f)
+        record_learned(learned_path(lex_path), [("Tyrex", "Typeless")])
+        lex = Lexicon.load(lex_path)
+        self.assertIn(("Tyrex", "Typeless"), lex.learned_hints)
+        self.assertEqual(lex.hotwords[0], "Typeless")
+        self.assertEqual(lex.apply("类似 Tyrex 这种"), "类似 Tyrex 这种", "one edit is only a hint")
+        record_learned(learned_path(lex_path), [("Tyrex", "Typeless")])
+        self.assertEqual(Lexicon.load(lex_path).apply("类似 Tyrex 这种"), "类似 Typeless 这种")
+
+
 class LeakTest(unittest.TestCase):
     def test_strips_context_readback_only(self):
         from asr import Recognizer

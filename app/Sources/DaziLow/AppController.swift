@@ -6,6 +6,8 @@ import ServiceManagement
 /// Wires hotkey, microphone, engine and paste together.
 final class AppController: NSObject, NSApplicationDelegate {
     private let hotkey = HotkeyMonitor()
+    private let watcher = CorrectionWatcher()
+    private let dashboard = DashboardWindow()
     private let recorder = AudioRecorder()
     private let hud = HUD()
     private let engineProcess = EngineProcess()
@@ -62,6 +64,13 @@ final class AppController: NSObject, NSApplicationDelegate {
 
         recorder.onChunk = { [weak self] samples in self?.sendAudio(samples) }
         recorder.prewarm()
+        watcher.onCorrections = { [weak self] pairs in
+            guard let self else { return }
+            self.engine.send(["type": "learn", "pairs": pairs.map { ["from": $0.0, "to": $0.1] }])
+            if let first = pairs.first {
+                self.hud.show(.message(pairs.count == 1 ? "记住了：\(first.0) → \(first.1)" : "记住了 \(pairs.count) 处修改"))
+            }
+        }
         hotkey.onAction = { [weak self] action in self?.handleHotkey(action) }
         hotkey.start()
         if !hotkey.comboRegistered { NSLog("DaziLow: ⌃⌥Space is taken by another app") }
@@ -200,6 +209,7 @@ final class AppController: NSObject, NSApplicationDelegate {
         } else {
             hud.show(.hidden)
             Paster.insert(text)
+            if let target { watcher.watch(inserted: text, pid: target) }
         }
     }
 
@@ -231,10 +241,13 @@ final class AppController: NSObject, NSApplicationDelegate {
         }
         if IsSecureEventInputEnabled() { return refuse("密码输入中，暂不能听写") }
 
+        watcher.stop()
         let id = UUID().uuidString
         let front = NSWorkspace.shared.frontmostApplication
         targetPID = front?.processIdentifier
-        engine.send(["type": "begin", "id": id,
+        // Window title and the text before the cursor help with names and terms.
+        let context = (AXIsProcessTrusted() ? front.map { AXText.context(pid: $0.processIdentifier) } : nil) ?? ""
+        engine.send(["type": "begin", "id": id, "context": context,
                      "app": front?.bundleIdentifier ?? "", "app_name": front?.localizedName ?? ""])
         currentID = id
         audioQueue.sync { streamingID = id }
@@ -249,7 +262,7 @@ final class AppController: NSObject, NSApplicationDelegate {
         }
         Sound.start()
         audioQueue.async { self.sentSamples = 0 }
-        AppLog.write("recording started (front app \(front?.bundleIdentifier ?? "?"))")
+        AppLog.write("recording started (front app \(front?.bundleIdentifier ?? "?"), context \(context.count) chars)")
         hud.show(.listening(handsFree: false))
         let limit = DispatchWorkItem { [weak self] in
             self?.hotkey.resetAfterExternalStop()
@@ -355,6 +368,7 @@ final class AppController: NSObject, NSApplicationDelegate {
         help.isEnabled = false
         menu.addItem(help)
         menu.addItem(.separator())
+        menu.addItem(item("打开面板（词库、统计、历史）…", #selector(openDashboard), key: ","))
         lastItem.target = self
         lastItem.isEnabled = false
         menu.addItem(lastItem)
@@ -383,6 +397,7 @@ final class AppController: NSObject, NSApplicationDelegate {
                                            accessibilityDescription: "Dazi")
     }
 
+    @objc private func openDashboard() { dashboard.show() }
     @objc private func copyLast() { if let t = lastText { Paster.copy(t) } }
     @objc private func openLexicon() { NSWorkspace.shared.open(Paths.lexicon) }
     @objc private func openHistory() { NSWorkspace.shared.open(Paths.history) }

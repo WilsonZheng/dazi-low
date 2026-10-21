@@ -12,7 +12,7 @@ import numpy as np
 
 from asr import Recognizer
 from guard import check, novelty, tokens
-from lexicon import Lexicon
+from lexicon import Lexicon, lexicon_mtime
 from polish import Polisher
 from prompts import build_system_prompt, user_message
 from segmenter import has_speech, join_texts, session_language
@@ -95,6 +95,12 @@ def join_chunks(chunks: list[str], continues: list[bool] | None = None) -> str:
     return "\n".join(l for l in out if l is not None)
 
 
+def context_terms(context: str) -> set[str]:
+    """Latin tokens from the text around the cursor (names, repos, tools), in the
+    guard's own tokenization; Chinese characters are not exempted."""
+    return {t for t in tokens(context or "") if t.isascii()}
+
+
 def clean_fillers(text: str) -> str:
     """Deterministic cleanup for text that skipped the post-editor."""
     text = _FILLER.sub("", text)
@@ -126,16 +132,29 @@ class Pipeline:
     def _system_prompt(self, minimal: bool = False) -> str:
         return build_system_prompt(self.lexicon.terms, self.lexicon.examples, self.lexicon.misheard, minimal=minimal)
 
-    def reload_lexicon(self, lexicon: Lexicon) -> None:
+    def reload_lexicon(self, lexicon: Lexicon, should_stop=None) -> None:
+        """Only a change to lexicon.json rebuilds the post-editor's cached prompts (tens of
+        seconds); learned corrections just refresh rules, hotwords and per-request hints."""
+        full = lexicon.base_mtime != self.lexicon.base_mtime
+        old_base = self.lexicon.base_mtime
         self.lexicon = lexicon
         self.allowed = {t for term in lexicon.terms for t in tokens(term)}
+        self.allowed |= {t for _, dst in lexicon.learned_hints for t in tokens(dst)}
         self.asr.set_hotwords(lexicon.hotwords)
-        if self.polisher:
-            self.polisher.set_system_prompt(self._system_prompt(minimal=True), "minimal")
-            self.polisher.set_system_prompt(self._system_prompt())
+        if self.polisher and full:
+            done = (self.polisher.set_system_prompt(self._system_prompt(minimal=True), "minimal", should_stop)
+                    and self.polisher.set_system_prompt(self._system_prompt(), "default", should_stop))
+            if not done:
+                # Someone started talking: keep the old prompts and retry when idle.
+                self.lexicon.base_mtime = old_base
+                self.lexicon.mtime = -1
+                log.info("lexicon rebuild paused for a dictation; will retry")
+                return
+        log.info("lexicon reloaded (%s): %d terms, %d learned", "full" if full else "learned only",
+                 len(lexicon.terms), len(lexicon.learned_hints))
 
     def lexicon_changed(self, path: str) -> bool:
-        return os.path.exists(path) and os.path.getmtime(path) != self.lexicon.mtime
+        return lexicon_mtime(path) != self.lexicon.mtime
 
     def warmup(self) -> None:
         self.asr.warmup()
@@ -168,27 +187,34 @@ class Pipeline:
             session.lang = session_language(text)
         return text, secs
 
-    def edit(self, raw: str, app_name: str, timings: dict | None = None, should_stop=None) -> str | None:
+    def edit(self, raw: str, app_name: str, timings: dict | None = None, should_stop=None,
+             context: str = "") -> str | None:
         """Post-edits one piece of transcript, with the guard and the minimal-edit retry.
         Returns None if `should_stop` interrupted it."""
         fixed = collapse_acronyms(self.lexicon.apply(raw))
         if not self.polisher or not fixed.strip():
             return fixed
         t = timings if timings is not None else {}
-        r = self.polisher.polish(user_message(fixed, app_name), source=fixed, should_stop=should_stop)
+        # Words around the cursor may name the people and terms being talked about;
+        # they are allowed in the output without counting as invented content.
+        allowed = self.allowed | context_terms(context)
+        if self.lexicon.learned_hints:
+            learned = "；".join(f"{a}→{b}" for a, b in self.lexicon.learned_hints)
+            context = f"{context}\n用户以前手动纠正过（上下文说得通时照此改）：{learned}".strip()
+        r = self.polisher.polish(user_message(fixed, app_name, context), source=fixed, should_stop=should_stop)
         if r.stopped:
             return None
         t["polish_prefill"] = round(t.get("polish_prefill", 0) + r.prefill_s, 3)
         t["polish_gen"] = round(t.get("polish_gen", 0) + r.gen_s, 3)
         t["polish_tokens"] = t.get("polish_tokens", 0) + r.tokens
-        why = check(fixed, r.text, self.allowed) if r.complete else "incomplete"
+        why = check(fixed, r.text, allowed) if r.complete else "incomplete"
         if why:
             # Never log dictated text; history (if enabled) has it.
             log.warning("post-edit rejected (%s): %d -> %d chars, novelty %.2f; retrying minimal edit",
-                        why, len(fixed), len(r.text), novelty(fixed, r.text, self.allowed))
+                        why, len(fixed), len(r.text), novelty(fixed, r.text, allowed))
             t["polish_rejected"] = t.get("polish_rejected", 0) + 1
-            r = self.polisher.polish(user_message(fixed, app_name), source=fixed, prompt="minimal")
-            why = check(fixed, r.text, self.allowed) if r.complete else "incomplete"
+            r = self.polisher.polish(user_message(fixed, app_name, context), source=fixed, prompt="minimal")
+            why = check(fixed, r.text, allowed) if r.complete else "incomplete"
             if why:
                 t["minimal_rejected"] = t.get("minimal_rejected", 0) + 1
                 return clean_fillers(fixed)
@@ -214,7 +240,8 @@ class Pipeline:
             pending = join_texts([session.pending, text]) if session.pending else text
             complete, session.pending, cont = split_complete(pending)
             if len(complete) >= 15:
-                edited = self.edit(complete, session.app_name, session.chunk_timings, should_stop)
+                edited = self.edit(complete, session.app_name, session.chunk_timings, should_stop,
+                                   getattr(session, "context", ""))
                 if edited is None:  # the key was released: finalize takes over from here
                     session.chunked -= 1
                     session.pending = pending_before
@@ -249,13 +276,13 @@ class Pipeline:
         if self.cfg.get("chunked", True) and session.segments:
             self.advance_chunks(session)  # anything the background did not get to
             rest = join_texts([session.pending, tail]) if session.pending else tail
-            last = self.edit(rest, session.app_name, timings) if rest.strip() else ""
+            last = self.edit(rest, session.app_name, timings, context=getattr(session, "context", "")) if rest.strip() else ""
             text = join_chunks(session.edited + [last], session.continues + [False])
             timings["chunks"] = len(session.edited) + 1
             for k, v in session.chunk_timings.items():
                 timings["bg_" + k] = v
         else:
-            text = self.edit(raw, session.app_name, timings)
+            text = self.edit(raw, session.app_name, timings, context=getattr(session, "context", ""))
         timings["total_engine"] = round(time.perf_counter() - t0, 3)
         return {"text": text, "raw": raw, "timings": timings}
 

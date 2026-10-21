@@ -22,6 +22,15 @@ if let i = args.firstIndex(of: "--mic-test") {
     exit(samples > 0 ? 0 : 1)
 }
 
+if args.contains("--dashboard") {
+    // Opens only the dashboard (for checking it without the menu-bar app).
+    let app = NSApplication.shared
+    app.setActivationPolicy(.regular)
+    let dash = DashboardWindow()
+    DispatchQueue.main.async { dash.show() }
+    app.run()
+}
+
 let app = NSApplication.shared
 let controller = AppController()
 app.delegate = controller
