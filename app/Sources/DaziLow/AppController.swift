@@ -313,7 +313,7 @@ final class AppController: NSObject, NSApplicationDelegate {
         audioQueue.async { self.streamingID = nil }
         engine.send(["type": "cancel", "id": id])
         finish()
-        hud.show(.hidden)
+        hud.show(.message("已取消"))
     }
 
     private func finish() {

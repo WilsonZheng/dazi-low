@@ -13,6 +13,7 @@ final class HUD {
     private let panel: NSPanel
     private let wave = WaveformView()
     private let label = NSTextField(labelWithString: "")
+    private let hint = NSTextField(labelWithString: "")
     private var timer: Timer?
     private var hideTimer: Timer?
     private var startedAt = Date()
@@ -21,7 +22,7 @@ final class HUD {
     private(set) var mode: Mode = .hidden
 
     init() {
-        panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 240, height: 44),
+        panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 300, height: 44),
                         styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
         panel.isFloatingPanel = true
         panel.level = .statusBar
@@ -50,6 +51,12 @@ final class HUD {
         label.frame = NSRect(x: 168, y: 13, width: 58, height: 18)
         label.lineBreakMode = .byTruncatingTail
         bg.addSubview(label)
+
+        hint.font = .systemFont(ofSize: 11, weight: .regular)
+        hint.textColor = NSColor.white.withAlphaComponent(0.55)
+        hint.stringValue = "Esc 取消"
+        hint.frame = NSRect(x: 232, y: 14, width: 56, height: 16)
+        bg.addSubview(hint)
     }
 
     func show(_ newMode: Mode) {
@@ -100,11 +107,13 @@ final class HUD {
     private func layout(message: Bool) {
         if message {
             label.alignment = .center
-            label.frame = NSRect(x: 14, y: 13, width: 212, height: 18)
+            label.frame = NSRect(x: 14, y: 13, width: 272, height: 18)
         } else {
             label.alignment = .right
             label.frame = NSRect(x: 168, y: 13, width: 58, height: 18)
         }
+        // Only while listening: Esc cancels a recording, not processing.
+        if case .listening = mode { hint.isHidden = false } else { hint.isHidden = true }
     }
 
     private func tick() {
