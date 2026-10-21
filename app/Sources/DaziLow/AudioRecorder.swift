@@ -53,7 +53,7 @@ final class AudioRecorder {
                 let end = min(pos + 1600, samples.count)
                 let chunk = pos < end ? Array(samples[pos..<end]) : [Float](repeating: 0, count: 1600)
                 pos = end
-                self?.onChunk?(chunk)
+                self?.emit(chunk)
             }
             fakeTimer = t
             t.resume()
@@ -145,9 +145,16 @@ final class AudioRecorder {
         }
         guard error == nil, out.frameLength > 0, let ch = out.floatChannelData?[0] else { return }
         let samples = Array(UnsafeBufferPointer(start: ch, count: Int(out.frameLength)))
+        emit(samples)
+    }
+
+    private func emit(_ samples: [Float]) {
         var sum: Float = 0
         for s in samples { sum += s * s }
-        level = min(1, sqrt(sum / Float(samples.count)) * 6)
+        // Decibel scale: this microphone records quietly (speech peaks near RMS 0.02),
+        // so a linear level would barely move. -52 dB -> 0, -24 dB -> 1.
+        let db = 20 * log10(max(sqrt(sum / Float(max(samples.count, 1))), 1e-6))
+        level = max(0, min(1, (db + 52) / 28))
         onChunk?(samples)
     }
 

@@ -1,6 +1,7 @@
 import AppKit
 
-/// Small floating capsule at the bottom of the screen showing recording state.
+/// Floating capsule at the bottom of the screen: a live waveform while recording
+/// (scrolling right to left, driven by the microphone level), a pulse while processing.
 final class HUD {
     enum Mode: Equatable {
         case hidden
@@ -10,16 +11,17 @@ final class HUD {
     }
 
     private let panel: NSPanel
-    private let dot = NSView()
+    private let wave = WaveformView()
     private let label = NSTextField(labelWithString: "")
-    private let bars: [NSView] = (0..<5).map { _ in NSView() }
     private var timer: Timer?
+    private var hideTimer: Timer?
     private var startedAt = Date()
+    private var handsFree = false
     var levelProvider: (() -> Float)?
     private(set) var mode: Mode = .hidden
 
     init() {
-        panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 190, height: 40),
+        panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 240, height: 44),
                         styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
         panel.isFloatingPanel = true
         panel.level = .statusBar
@@ -32,28 +34,20 @@ final class HUD {
         let bg = NSVisualEffectView(frame: panel.contentView!.bounds)
         bg.autoresizingMask = [.width, .height]
         bg.material = .hudWindow
+        bg.appearance = NSAppearance(named: .darkAqua)
         bg.state = .active
         bg.wantsLayer = true
-        bg.layer?.cornerRadius = 20
+        bg.layer?.cornerRadius = 22
         bg.layer?.masksToBounds = true
         panel.contentView = bg
 
-        dot.wantsLayer = true
-        dot.layer?.cornerRadius = 5
-        dot.frame = NSRect(x: 16, y: 15, width: 10, height: 10)
-        bg.addSubview(dot)
-
-        for (i, b) in bars.enumerated() {
-            b.wantsLayer = true
-            b.layer?.backgroundColor = NSColor.labelColor.withAlphaComponent(0.8).cgColor
-            b.layer?.cornerRadius = 1.5
-            b.frame = NSRect(x: 34 + CGFloat(i) * 6, y: 17, width: 3, height: 6)
-            bg.addSubview(b)
-        }
+        wave.frame = NSRect(x: 16, y: 8, width: 150, height: 28)
+        bg.addSubview(wave)
 
         label.font = .monospacedDigitSystemFont(ofSize: 13, weight: .medium)
-        label.textColor = .labelColor
-        label.frame = NSRect(x: 70, y: 11, width: 112, height: 18)
+        label.textColor = .white
+        label.alignment = .right
+        label.frame = NSRect(x: 168, y: 13, width: 58, height: 18)
         label.lineBreakMode = .byTruncatingTail
         bg.addSubview(label)
     }
@@ -62,30 +56,34 @@ final class HUD {
         mode = newMode
         timer?.invalidate()
         timer = nil
+        hideTimer?.invalidate()
+        hideTimer = nil
         switch newMode {
         case .hidden:
             panel.orderOut(nil)
             return
-        case .listening(let handsFree):
+        case .listening(let free):
             startedAt = Date()
-            dot.layer?.backgroundColor = NSColor.systemRed.cgColor
-            bars.forEach { $0.isHidden = false }
-            label.frame.origin.x = 70
-            label.stringValue = handsFree ? "0:00 免提" : "0:00"
-            timer = Timer.scheduledTimer(withTimeInterval: 0.08, repeats: true) { [weak self] _ in
-                self?.tick(handsFree: handsFree)
-            }
+            handsFree = free
+            wave.reset(color: .systemRed)
+            wave.isHidden = false
+            layout(message: false)
+            // 20 samples/s over 30 bars: the last 1.5 s of speech.
+            timer = Timer.scheduledTimer(withTimeInterval: 1.0 / 20, repeats: true) { [weak self] _ in self?.tick() }
+            tick()
         case .processing:
-            dot.layer?.backgroundColor = NSColor.systemBlue.cgColor
-            bars.forEach { $0.isHidden = true }
-            label.frame.origin.x = 36
-            label.stringValue = "整理中…"
+            wave.color = .systemBlue
+            wave.isHidden = false
+            layout(message: false)
+            label.stringValue = "整理中"
+            timer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30, repeats: true) { [weak self] _ in
+                self?.wave.pulse()
+            }
         case .message(let text):
-            dot.layer?.backgroundColor = NSColor.systemOrange.cgColor
-            bars.forEach { $0.isHidden = true }
-            label.frame.origin.x = 36
+            wave.isHidden = true
+            layout(message: true)
             label.stringValue = text
-            timer = Timer.scheduledTimer(withTimeInterval: 2.5, repeats: false) { [weak self] _ in
+            hideTimer = Timer.scheduledTimer(withTimeInterval: 2.5, repeats: false) { [weak self] _ in
                 self?.show(.hidden)
             }
         }
@@ -95,21 +93,25 @@ final class HUD {
 
     func setHandsFree(_ on: Bool) {
         guard case .listening = mode else { return }
-        let started = startedAt
-        show(.listening(handsFree: on))
-        startedAt = started
+        handsFree = on
+        mode = .listening(handsFree: on)
     }
 
-    private func tick(handsFree: Bool) {
-        let level = CGFloat(levelProvider?() ?? 0)
-        for (i, b) in bars.enumerated() {
-            let wobble = CGFloat(abs(sin(Date().timeIntervalSince1970 * 9 + Double(i) * 1.3)))
-            let h = max(4, min(22, 4 + level * 22 * (0.55 + 0.45 * wobble)))
-            b.frame = NSRect(x: b.frame.origin.x, y: 20 - h / 2, width: 3, height: h)
+    private func layout(message: Bool) {
+        if message {
+            label.alignment = .center
+            label.frame = NSRect(x: 14, y: 13, width: 212, height: 18)
+        } else {
+            label.alignment = .right
+            label.frame = NSRect(x: 168, y: 13, width: 58, height: 18)
         }
+    }
+
+    private func tick() {
+        wave.push(CGFloat(levelProvider?() ?? 0))
         let secs = Int(Date().timeIntervalSince(startedAt))
         let t = String(format: "%d:%02d", secs / 60, secs % 60)
-        label.stringValue = handsFree ? "\(t) 免提" : t
+        label.stringValue = handsFree ? "免提 \(t)" : t
     }
 
     private func position() {
@@ -118,5 +120,45 @@ final class HUD {
         guard let vf = screen?.visibleFrame else { return }
         let size = panel.frame.size
         panel.setFrameOrigin(NSPoint(x: vf.midX - size.width / 2, y: vf.minY + 36))
+    }
+}
+
+/// Rolling bar waveform; newest sample on the right.
+final class WaveformView: NSView {
+    private static let bars = 30
+    private var samples = [CGFloat](repeating: 0, count: WaveformView.bars)
+    private var phase: CGFloat = 0
+    var color: NSColor = .systemRed { didSet { needsDisplay = true } }
+
+    func reset(color: NSColor) {
+        samples = [CGFloat](repeating: 0, count: Self.bars)
+        self.color = color
+    }
+
+    func push(_ level: CGFloat) {
+        // Smooth a little so the bars move like speech, not like noise.
+        let last = samples.last ?? 0
+        samples.removeFirst()
+        samples.append(max(level, last * 0.55))
+        needsDisplay = true
+    }
+
+    func pulse() {
+        phase += 0.18
+        samples = (0..<Self.bars).map { i in 0.25 + 0.2 * (1 + sin(phase - CGFloat(i) * 0.35)) }
+        needsDisplay = true
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let n = CGFloat(Self.bars)
+        let gap: CGFloat = 2
+        let w = (bounds.width - gap * (n - 1)) / n
+        color.setFill()
+        for (i, v) in samples.enumerated() {
+            let h = max(3, min(bounds.height, 3 + v * (bounds.height - 3)))
+            let x = CGFloat(i) * (w + gap)
+            let r = NSRect(x: x, y: (bounds.height - h) / 2, width: w, height: h)
+            NSBezierPath(roundedRect: r, xRadius: w / 2, yRadius: w / 2).fill()
+        }
     }
 }
