@@ -143,7 +143,8 @@ Typeless: MER 9.4 against Typeless's own output, 100% term recall.
 A separate judge compared outputs pairwise without knowing which system wrote which.
 
 - Against Typeless on the user's Typeless recordings (40 clips): Typeless 21, Dazi 5,
-  tie 14. Typeless still wins mostly on recognition errors the 8B editor cannot repair
+  tie 14; re-judged after chunked editing and six examples (39 clips): Typeless 19,
+  Dazi 5, tie 15. Typeless still wins mostly on recognition errors the 8B editor cannot repair
   and on residual false starts.
 - Against VoiceInk on held-out VoiceInk recordings (40 clips, never used for tuning):
   Dazi 28, VoiceInk 6, tie 6 — including 11–4–5 against VoiceInk's 27B-LLM enhancement.
