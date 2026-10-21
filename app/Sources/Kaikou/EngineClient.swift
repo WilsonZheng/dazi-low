@@ -7,7 +7,7 @@ final class EngineClient {
     var onDisconnect: (() -> Void)?
 
     private var fd: Int32 = -1
-    private let writeQueue = DispatchQueue(label: "dazi.engine.write")
+    private let writeQueue = DispatchQueue(label: "kaikou.engine.write")
     private let lock = NSLock()
 
     init(socketPath: String) {
@@ -41,7 +41,7 @@ final class EngineClient {
         setsockopt(s, SOL_SOCKET, SO_NOSIGPIPE, &one, socklen_t(MemoryLayout<Int32>.size))
         lock.lock(); fd = s; lock.unlock()
         let reader = Thread { [weak self] in self?.readLoop(s) }
-        reader.name = "dazi.engine.read"
+        reader.name = "kaikou.engine.read"
         reader.start()
         return true
     }

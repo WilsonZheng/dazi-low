@@ -58,7 +58,7 @@ enum AXText {
     }
 }
 
-/// Word-level diff between what Dazi inserted and what the user turned it into.
+/// Word-level diff between what Kaikou inserted and what the user turned it into.
 enum TokenDiff {
     /// Latin words (with . _ - inside), single CJK characters, or single other characters.
     static func tokens(_ s: String) -> [String] {
@@ -135,7 +135,7 @@ enum TokenDiff {
     }
 }
 
-/// Watches the text Dazi just pasted; if the user fixes words in it, reports the fixes.
+/// Watches the text Kaikou just pasted; if the user fixes words in it, reports the fixes.
 final class CorrectionWatcher {
     var onCorrections: (([(String, String)]) -> Void)?
     private var timer: Timer?

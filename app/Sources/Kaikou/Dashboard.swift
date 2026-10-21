@@ -157,7 +157,7 @@ func summaryText(records: [DictationRecord], learned: [LearnedItem]) -> String {
         let top = learned.prefix(3).map { "\($0.from) → \($0.to)" }.joined(separator: "、")
         lines.append("已经从你的手动修改里学会 \(learned.count) 处：\(top)。")
     } else {
-        lines.append("还没有学到纠错：识别错了就直接在输入框里改掉，Dazi 会记住。")
+        lines.append("还没有学到纠错：识别错了就直接在输入框里改掉，Kaikou 会记住。")
     }
     return lines.joined(separator: "\n")
 }
@@ -166,7 +166,7 @@ func summaryText(records: [DictationRecord], learned: [LearnedItem]) -> String {
 
 struct DashboardView: View {
     @ObservedObject var store: DashboardStore
-    @State private var tab = Int(ProcessInfo.processInfo.environment["DAZI_DASHBOARD_TAB"] ?? "0") ?? 0
+    @State private var tab = Int(ProcessInfo.processInfo.environment["KAIKOU_DASHBOARD_TAB"] ?? "0") ?? 0
 
     var body: some View {
         TabView(selection: $tab) {
@@ -327,7 +327,7 @@ final class DashboardWindow {
         if window == nil {
             let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 760, height: 600),
                              styleMask: [.titled, .closable, .resizable, .miniaturizable], backing: .buffered, defer: false)
-            w.title = "Dazi"
+            w.title = "Kaikou"
             w.isReleasedWhenClosed = false
             w.contentViewController = NSHostingController(rootView: DashboardView(store: store))
             w.center()

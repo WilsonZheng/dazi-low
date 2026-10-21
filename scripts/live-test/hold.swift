@@ -10,7 +10,7 @@ func flags(_ down: Bool) {
     e.post(tap: .cghidEventTap)
 }
 // Synthetic modifier state decays after ~3 s, so keep re-posting the press
-// (Dazi ignores repeated presses); a real held key needs no such help.
+// (Kaikou ignores repeated presses); a real held key needs no such help.
 flags(true)
 var held = 0.0
 while held < secs {

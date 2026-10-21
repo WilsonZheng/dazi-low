@@ -1,6 +1,6 @@
-# Dazi Low（打字 Low）
+# Kaikou（开口）
 
-一个只给自己用的 macOS 语音输入工具：按一下左 Control + Shift 开始说话，说完再按一下，整理好的文字直接出现在光标处。全部在本机运行，不花钱，不联网。
+开口就能打字。一个只给自己用的 macOS 语音输入工具：按一下左 Control + Shift 开始说话，说完再按一下，整理好的文字直接出现在光标处。全部在本机运行，不花钱，不联网。
 
 对标 Typeless，只做一件事：中英混说的语音转文字，并且像 Typeless 一样把口语整理成通顺的文字（去口头禅、合并改口、长段落分段或整理成编号列表）。
 
@@ -15,11 +15,11 @@
 
 ⌃⇧ 中间按了别的键（比如 ⌃⇧Tab）或者按住超过 1 秒，都不会触发，所以不会和其他快捷键冲突。
 
-**改快捷键**：面板 →“设置”→“录制新快捷键”，直接按你想用的组合，立即生效，不用重启。可以用两个以上修饰键的组合（左⌃ 左⇧、⌥⌘…）、右边的单个修饰键（右⌥）、fn，或修饰键加一个键（⌥Space、⌃`，会被 Dazi 独占）；还可以选“按一下开始、再按一下结束”或“按住说话、松开结束”。太容易误触的键（比如单独一个左 ⇧）会被拒绝。
+**改快捷键**：面板 →“设置”→“录制新快捷键”，直接按你想用的组合，立即生效，不用重启。可以用两个以上修饰键的组合（左⌃ 左⇧、⌥⌘…）、右边的单个修饰键（右⌥）、fn，或修饰键加一个键（⌥Space、⌃`，会被 Kaikou 独占）；还可以选“按一下开始、再按一下结束”或“按住说话、松开结束”。太容易误触的键（比如单独一个左 ⇧）会被拒绝。
 
 录音时屏幕下方有一条跟着你声音跳动的波形；松手后变成蓝色的“整理中”。
 
-打开面板：点菜单栏的麦克风图标 →“打开面板”；菜单栏图标被刘海挡住时，用 Spotlight 搜“Dazi”回车也会直接打开面板。面板里有：
+打开面板：点菜单栏的麦克风图标 →“打开面板”；菜单栏图标被刘海挡住时，用 Spotlight 搜“Kaikou”回车也会直接打开面板。面板里有：
 
 - **概览**：今天和全部的次数、字数、省下的打字时间、松手后等待时间、最近 14 天的字数和一段分析总结。
 - **词库**：你的词汇（可以搜索、添加、删除）、自动学会的纠错、所有纠错规则。
@@ -27,7 +27,7 @@
 
 ## 越用越准
 
-- **自我学习**：识别错了，直接在输入框里改掉就行。Dazi 会在粘贴后观察那段文字，发现你把某个词改掉了，就记下来：改过一次，下次作为提示交给整理模型，并把正确的词放到识别热词最前面；同样的修改出现两次，就变成自动替换。学到的内容在面板的“词库”里，学错了可以删掉。只能观察能读取文字的输入框（大部分原生 App、Slack 等），终端里读不到。
+- **自我学习**：识别错了，直接在输入框里改掉就行。Kaikou 会在粘贴后观察那段文字，发现你把某个词改掉了，就记下来：改过一次，下次作为提示交给整理模型，并把正确的词放到识别热词最前面；同样的修改出现两次，就变成自动替换。学到的内容在面板的“词库”里，学错了可以删掉。只能观察能读取文字的输入框（大部分原生 App、Slack 等），终端里读不到。
 - **结合上下文**：开始录音时会读当前窗口的标题和光标前的一小段文字，帮助整理模型判断人名、仓库名怎么写（只参考，不写进结果）。
 
 ## 安装
@@ -38,17 +38,17 @@
 ./scripts/install.sh
 ```
 
-脚本会编译 App 并装到 `~/Applications/DaziLow.app`，在 `~/Library/Application Support/DaziLow/venv` 建好推理环境，并下载两个模型（约 8 GB）。
+脚本会编译 App 并装到 `~/Applications/Kaikou.app`，在 `~/Library/Application Support/Kaikou/venv` 建好推理环境，并下载两个模型（约 8 GB）。
 
-第一次启动时，要在「系统设置 → 隐私与安全性」里给 Dazi 打开两项权限：
+第一次启动时，要在「系统设置 → 隐私与安全性」里给 Kaikou 打开两项权限：
 
 - **麦克风**：用来听你说话。
 - **辅助功能**：用来监听 ⌃⇧，以及把文字粘贴到其他 App。
 
-**公司管理的 Mac 上开辅助功能需要管理员**。这种情况下不用申请：只要从一个已经有辅助功能和麦克风权限的终端（比如 Orca）里启动 Dazi，它就沿用那个终端的权限。`scripts/dazi-ensure` 做的就是这件事：如果 Dazi 没在运行，或者在运行但没有权限，就从当前终端重新启动它。安装脚本会把它链接到 `~/.local/bin/dazi-ensure`，在 `~/.zshrc` 里加一行，让每次打开 Orca 终端时自动在后台运行一下：
+**公司管理的 Mac 上开辅助功能需要管理员**。这种情况下不用申请：只要从一个已经有辅助功能和麦克风权限的终端（比如 Orca）里启动 Kaikou，它就沿用那个终端的权限。`scripts/kaikou-ensure` 做的就是这件事：如果 Kaikou 没在运行，或者在运行但没有权限，就从当前终端重新启动它。安装脚本会把它链接到 `~/.local/bin/kaikou-ensure`，在 `~/.zshrc` 里加一行，让每次打开 Orca 终端时自动在后台运行一下：
 
 ```bash
-[[ "$TERM_PROGRAM" == "Orca" && -x "$HOME/.local/bin/dazi-ensure" ]] && ( "$HOME/.local/bin/dazi-ensure" >/dev/null 2>&1 & )
+[[ "$TERM_PROGRAM" == "Orca" && -x "$HOME/.local/bin/kaikou-ensure" ]] && ( "$HOME/.local/bin/kaikou-ensure" >/dev/null 2>&1 & )
 ```
 
 完全没有辅助功能权限时也能用：按住 ⌃⌥Space 说话，松开后文字会放进剪贴板，自己按 ⌘V 粘贴。权限一打开，App 会自动启用 ⌃⇧ 和自动粘贴，不用重启。
@@ -67,7 +67,7 @@
 
 ## 个人数据
 
-词汇表、示例、历史录音都放在 `~/Library/Application Support/DaziLow/`，不进这个仓库。
+词汇表、示例、历史录音都放在 `~/Library/Application Support/Kaikou/`，不进这个仓库。
 
 - `lexicon.json`：词汇表和纠错规则，改完下一次说话时自动生效。
 - `config.json`（可选）：覆盖默认设置，比如换模型。
@@ -77,17 +77,17 @@
 
 ```bash
 swift test --package-path app                                   # App 单元测试
-~/Library/Application\ Support/DaziLow/venv/bin/python -m unittest discover engine/tests   # 引擎测试
+~/Library/Application\ Support/Kaikou/venv/bin/python -m unittest discover engine/tests   # 引擎测试
 ./scripts/build_app.sh                                          # 只编译 App
 ```
 
-引擎日志在 `~/Library/Logs/DaziLow/engine.log`，当前权限和引擎状态在 `~/Library/Application Support/DaziLow/status.json`。
+引擎日志在 `~/Library/Logs/Kaikou/engine.log`，当前权限和引擎状态在 `~/Library/Application Support/Kaikou/status.json`。
 
 不需要任何权限的自测：
 
 ```bash
-~/Applications/DaziLow.app/Contents/MacOS/DaziLow --mic-test 3                        # 麦克风录 3 秒
-~/Applications/DaziLow.app/Contents/MacOS/DaziLow --transcribe --realtime a.wav b.wav  # 按真实语速走完整链路
+~/Applications/Kaikou.app/Contents/MacOS/Kaikou --mic-test 3                        # 麦克风录 3 秒
+~/Applications/Kaikou.app/Contents/MacOS/Kaikou --transcribe --realtime a.wav b.wav  # 按真实语速走完整链路
 ```
 
 `./scripts/install.sh` 默认只更新引擎（放在 App 包外面），不会改动 App 的签名，所以权限不会丢；加 `--app` 才会重装 App。

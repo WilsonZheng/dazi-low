@@ -1,9 +1,9 @@
 import Foundation
 
-/// Small event log at ~/Library/Logs/DaziLow/app.log (no dictated text, only events),
+/// Small event log at ~/Library/Logs/Kaikou/app.log (no dictated text, only events),
 /// so a failed dictation can be explained afterwards.
 enum AppLog {
-    private static let queue = DispatchQueue(label: "dazi.applog")
+    private static let queue = DispatchQueue(label: "kaikou.applog")
     private static let url = Paths.logs.appendingPathComponent("app.log")
     private static let formatter: DateFormatter = {
         let f = DateFormatter()

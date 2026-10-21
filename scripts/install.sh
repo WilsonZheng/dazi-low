@@ -1,11 +1,24 @@
 #!/bin/zsh
-# Builds Dazi, installs it to ~/Applications, prepares the engine venv and models.
+# Builds Kaikou, installs it to ~/Applications, prepares the engine venv and models.
 # No admin rights needed. Re-run after pulling changes.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-SUPPORT="$HOME/Library/Application Support/DaziLow"
-DEST="$HOME/Applications/DaziLow.app"
-mkdir -p "$SUPPORT" "$HOME/Applications" "$HOME/Library/Logs/DaziLow"
+SUPPORT="$HOME/Library/Application Support/Kaikou"
+DEST="$HOME/Applications/Kaikou.app"
+
+# One-time move from the app's old name (Dazi Low): data, logs, settings.
+OLD_SUPPORT="$HOME/Library/Application Support/DaziLow"
+if [ -d "$OLD_SUPPORT" ] && [ ! -d "$SUPPORT" ]; then
+  echo "==> moving data from Dazi Low"
+  pkill -x DaziLow 2>/dev/null && sleep 1 || true
+  mv "$OLD_SUPPORT" "$SUPPORT"
+  [ -d "$HOME/Library/Logs/DaziLow" ] && mv "$HOME/Library/Logs/DaziLow" "$HOME/Library/Logs/Kaikou"
+  for f in "$SUPPORT"/history/*.jsonl(N); do sed -i '' 's|Application Support/DaziLow|Application Support/Kaikou|g' "$f"; done
+  defaults export com.wilsonzheng.dazilow - 2>/dev/null | defaults import com.wilsonzheng.kaikou - 2>/dev/null || true
+  defaults delete com.wilsonzheng.kaikou registeredLoginItem 2>/dev/null || true
+  rm -rf "$HOME/Applications/DaziLow.app" "$HOME/.local/bin/dazi-ensure"
+fi
+mkdir -p "$SUPPORT" "$HOME/Applications" "$HOME/Library/Logs/Kaikou"
 
 "$ROOT/scripts/build_app.sh"
 
@@ -36,7 +49,7 @@ if [ ! -f "$SUPPORT/lexicon.json" ]; then
 fi
 
 mkdir -p "$HOME/.local/bin"
-ln -sf "$ROOT/scripts/dazi-ensure" "$HOME/.local/bin/dazi-ensure"
+ln -sf "$ROOT/scripts/kaikou-ensure" "$HOME/.local/bin/kaikou-ensure"
 
 echo "==> installing app"
 if [ -d "$DEST" ] && [ "${1:-}" != "--app" ]; then
@@ -46,8 +59,8 @@ if [ -d "$DEST" ] && [ "${1:-}" != "--app" ]; then
   echo "Pass --app to reinstall the app too (then re-enable its permissions)."
   exit 0
 fi
-pkill -x DaziLow 2>/dev/null && sleep 1 || true
+pkill -x Kaikou 2>/dev/null && sleep 1 || true
 rm -rf "$DEST"
-ditto "$ROOT/build/DaziLow.app" "$DEST"
+ditto "$ROOT/build/Kaikou.app" "$DEST"
 open "$DEST"
 echo "installed $DEST"

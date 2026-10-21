@@ -18,7 +18,7 @@ from polish import Polisher
 from prompts import build_system_prompt, user_message
 from segmenter import has_speech, join_texts, session_language
 
-log = logging.getLogger("dazi")
+log = logging.getLogger("kaikou")
 
 _CJK = re.compile(r"[㐀-鿿]")
 _DOTTED = re.compile(r"\b((?:[A-Z]\.){2,})")

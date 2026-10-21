@@ -1,19 +1,19 @@
 #!/bin/zsh
-# Starts Dazi from the current terminal unless a copy with Accessibility is running.
+# Starts Kaikou from the current terminal unless a copy with Accessibility is running.
 #
 # On a managed Mac where enabling Accessibility needs an administrator, an app launched
 # from a terminal that already has Accessibility and Microphone (Orca here) runs under
 # that terminal's permissions. ~/.zshrc calls this from Orca terminals only.
-APP="$HOME/Applications/DaziLow.app/Contents/MacOS/DaziLow"
-STATUS="$HOME/Library/Application Support/DaziLow/status.json"
-LOCK="${TMPDIR:-/tmp}/dazi-ensure.lock"
+APP="$HOME/Applications/Kaikou.app/Contents/MacOS/Kaikou"
+STATUS="$HOME/Library/Application Support/Kaikou/status.json"
+LOCK="${TMPDIR:-/tmp}/kaikou-ensure.lock"
 [ -x "$APP" ] || exit 0
 mkdir "$LOCK" 2>/dev/null || exit 0          # another terminal is already doing this
 trap 'rmdir "$LOCK" 2>/dev/null' EXIT
-if pgrep -x DaziLow >/dev/null; then
+if pgrep -x Kaikou >/dev/null; then
   sleep 3                                     # let a just-started copy write its status
   grep -q '"accessibility" : true' "$STATUS" 2>/dev/null && exit 0
-  pkill -x DaziLow
+  pkill -x Kaikou
   sleep 2
 fi
 nohup "$APP" >/dev/null 2>&1 &

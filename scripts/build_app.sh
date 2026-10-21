@@ -1,16 +1,16 @@
 #!/bin/zsh
-# Builds build/DaziLow.app (release, ad-hoc signed).
+# Builds build/Kaikou.app (release, ad-hoc signed).
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-APP="$ROOT/build/DaziLow.app"
-BUNDLE_ID="com.wilsonzheng.dazilow"
+APP="$ROOT/build/Kaikou.app"
+BUNDLE_ID="com.wilsonzheng.kaikou"
 
 swift build -c release --package-path "$ROOT/app"
-BIN="$(swift build -c release --package-path "$ROOT/app" --show-bin-path)/DaziLow"
+BIN="$(swift build -c release --package-path "$ROOT/app" --show-bin-path)/Kaikou"
 
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources/engine"
-cp "$BIN" "$APP/Contents/MacOS/DaziLow"
+cp "$BIN" "$APP/Contents/MacOS/Kaikou"
 cp "$ROOT/app/Info.plist" "$APP/Contents/Info.plist"
 cp "$ROOT"/engine/*.py "$ROOT/engine/requirements.txt" "$APP/Contents/Resources/engine/"
 
@@ -18,7 +18,7 @@ cp "$ROOT"/engine/*.py "$ROOT/engine/requirements.txt" "$APP/Contents/Resources/
 # (Microphone, Accessibility) bind to this exact build. A requirement on the bundle
 # identifier alone would survive rebuilds but let any app reusing the identifier
 # inherit the grants; a self-signed certificate needs an admin/GUI trust prompt.
-# So after reinstalling, re-enable Dazi under Privacy & Security.
+# So after reinstalling, re-enable Kaikou under Privacy & Security.
 codesign --force --sign - --identifier "$BUNDLE_ID" "$APP"
 codesign --verify --verbose=1 "$APP"
 echo "built $APP"

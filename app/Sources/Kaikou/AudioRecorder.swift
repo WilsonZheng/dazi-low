@@ -20,9 +20,9 @@ final class AudioRecorder {
     private let outFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: sampleRate, channels: 1, interleaved: false)!
     private var configObserver: NSObjectProtocol?
 
-    /// Test hook: DAZI_FAKE_MIC=/path/file.wav plays that file as the microphone, in real
+    /// Test hook: KAIKOU_FAKE_MIC=/path/file.wav plays that file as the microphone, in real
     /// time, so the whole live path (hotkey, HUD, engine, paste) can be tested end to end.
-    private let fakeMic = ProcessInfo.processInfo.environment["DAZI_FAKE_MIC"]
+    private let fakeMic = ProcessInfo.processInfo.environment["KAIKOU_FAKE_MIC"]
     private var fakeTimer: DispatchSourceTimer?
 
     /// The first audio engine in a process takes ~3 s to come up (Core Audio client
@@ -47,7 +47,7 @@ final class AudioRecorder {
         if let path = fakeMic {
             let samples = try SelfTest.loadMono16k(path)
             var pos = 0
-            let t = DispatchSource.makeTimerSource(queue: DispatchQueue(label: "dazi.fakemic"))
+            let t = DispatchSource.makeTimerSource(queue: DispatchQueue(label: "kaikou.fakemic"))
             t.schedule(deadline: .now(), repeating: .milliseconds(100))
             t.setEventHandler { [weak self] in
                 let end = min(pos + 1600, samples.count)
@@ -102,7 +102,7 @@ final class AudioRecorder {
         let input = engine.inputNode
         let inFormat = input.outputFormat(forBus: 0)
         guard inFormat.sampleRate > 0, inFormat.channelCount > 0 else {
-            throw NSError(domain: "DaziLow", code: 1, userInfo: [NSLocalizedDescriptionKey: "没有可用的麦克风"])
+            throw NSError(domain: "Kaikou", code: 1, userInfo: [NSLocalizedDescriptionKey: "没有可用的麦克风"])
         }
         converter = AVAudioConverter(from: inFormat, to: outFormat)
         input.installTap(onBus: 0, bufferSize: 1024, format: inFormat) { [weak self] buffer, _ in
@@ -123,7 +123,7 @@ final class AudioRecorder {
         do {
             try tapAndStart()
         } catch {
-            NSLog("DaziLow: audio restart failed: \(error)")
+            NSLog("Kaikou: audio restart failed: \(error)")
         }
     }
 

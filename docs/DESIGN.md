@@ -1,4 +1,4 @@
-# Dazi Low — design
+# Kaikou — design
 
 A personal, fully local push-to-talk dictation app for macOS (Apple Silicon), built to
 match Typeless on accuracy and output quality for mixed Chinese–English speech, at zero
@@ -20,7 +20,7 @@ Non-goals: meeting notes, commands, translation mode, multi-user settings, Windo
 ## Architecture
 
 ```
-┌──────────── DaziLow.app (Swift, menu bar) ────────────┐
+┌──────────── Kaikou.app (Swift, menu bar) ────────────┐
 │ HotkeyMonitor (Right ⌥)  →  AudioRecorder (16 kHz)    │
 │        │                          │ 100 ms PCM chunks │
 │        ▼                          ▼                   │
@@ -147,12 +147,12 @@ Typeless: MER 9.4 against Typeless's own output, 100% term recall.
 
 A separate judge compared outputs pairwise without knowing which system wrote which.
 
-- Against Typeless on the user's Typeless recordings (40 clips): Typeless 21, Dazi 5,
+- Against Typeless on the user's Typeless recordings (40 clips): Typeless 21, Kaikou 5,
   tie 14; re-judged after chunked editing and six examples (39 clips): Typeless 19,
-  Dazi 5, tie 15. Typeless still wins mostly on recognition errors the 8B editor cannot repair
+  Kaikou 5, tie 15. Typeless still wins mostly on recognition errors the 8B editor cannot repair
   and on residual false starts.
 - Against VoiceInk on held-out VoiceInk recordings (40 clips, never used for tuning):
-  Dazi 28, VoiceInk 6, tie 6 — including 11–4–5 against VoiceInk's 27B-LLM enhancement.
+  Kaikou 28, VoiceInk 6, tie 6 — including 11–4–5 against VoiceInk's 27B-LLM enhancement.
 
 ## Faithfulness guard
 
@@ -166,7 +166,7 @@ edit score 55% and up.
 
 Everything stays on the machine. Personal data — the vocabulary (colleague names,
 internal service names), example pairs, history and audio — lives in
-`~/Library/Application Support/DaziLow/`, never in this public repository.
+`~/Library/Application Support/Kaikou/`, never in this public repository.
 
 ## Hotkey (originally Right Option; changed at the user's request)
 
@@ -181,8 +181,8 @@ Left Ctrl+`, VoiceInk Ctrl+Tab) and is a single key.
 ## Open risks
 
 - Long run-on dictations edited in chunks come out as one paragraph instead of a list.
-- Accessibility needs an administrator on this managed Mac. `scripts/dazi-ensure` (run
-  from Orca terminals by ~/.zshrc) starts Dazi under Orca's existing Accessibility and
+- Accessibility needs an administrator on this managed Mac. `scripts/kaikou-ensure` (run
+  from Orca terminals by ~/.zshrc) starts Kaikou under Orca's existing Accessibility and
   Microphone grants; started any other way it runs in copy-to-clipboard mode on ⌃⌥Space.
 - TCC permissions are tied to the code signature. The app is ad-hoc signed with the
   default code-hash requirement, so a reinstall needs the two permissions re-enabled

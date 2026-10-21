@@ -32,7 +32,7 @@ final class AppController: NSObject, NSApplicationDelegate {
     private var lastText: String?
     /// Samples streamed for the current recording; only touched on `audioQueue`.
     private var sentSamples = 0
-    private let audioQueue = DispatchQueue(label: "dazi.audio.send")
+    private let audioQueue = DispatchQueue(label: "kaikou.audio.send")
 
     static let maxRecording: TimeInterval = 600
     /// Keep listening this long after release so the last syllable is not clipped.
@@ -49,6 +49,10 @@ final class AppController: NSObject, NSApplicationDelegate {
         Paths.ensure()
         setupStatusItem()
         hud.levelProvider = { [weak self] in self?.recorder.level ?? 0 }
+        hud.onCancel = { [weak self] in
+            self?.hotkey.resetAfterExternalStop()
+            self?.cancelRecording()
+        }
 
         engine.onMessage = { [weak self] msg in self?.handleEngine(msg) }
         engine.onDisconnect = { [weak self] in self?.engineLost() }
@@ -80,16 +84,16 @@ final class AppController: NSObject, NSApplicationDelegate {
                 self.hud.setHint(self.hotkey.spec.hint)
             }
         }
-        NotificationCenter.default.addObserver(forName: .daziHotkeyRecording, object: nil, queue: .main) { [weak self] n in
+        NotificationCenter.default.addObserver(forName: .kaikouHotkeyRecording, object: nil, queue: .main) { [weak self] n in
             self?.hotkey.paused = (n.object as? Bool) ?? false
         }
-        if !hotkey.comboRegistered { NSLog("DaziLow: ⌃⌥Space is taken by another app") }
+        if !hotkey.comboRegistered { NSLog("Kaikou: ⌃⌥Space is taken by another app") }
 
         requestPermissions()
         enableLaunchAtLoginOnce()
     }
 
-    /// Opening Dazi again (Spotlight, Finder, `open`) while it runs shows the panel, for
+    /// Opening Kaikou again (Spotlight, Finder, `open`) while it runs shows the panel, for
     /// when the menu-bar icon is hidden behind the notch.
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         dashboard.show()
@@ -366,7 +370,7 @@ final class AppController: NSObject, NSApplicationDelegate {
 
     private func setupStatusItem() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        statusItem.button?.image = NSImage(systemSymbolName: "mic.slash", accessibilityDescription: "Dazi")
+        statusItem.button?.image = NSImage(systemSymbolName: "mic.slash", accessibilityDescription: "Kaikou")
         let menu = NSMenu()
         statusLine.isEnabled = false
         menu.addItem(statusLine)
@@ -387,7 +391,7 @@ final class AppController: NSObject, NSApplicationDelegate {
         loginItem.target = self
         menu.addItem(loginItem)
         menu.addItem(.separator())
-        menu.addItem(item("退出 Dazi", #selector(quit), key: "q"))
+        menu.addItem(item("退出 Kaikou", #selector(quit), key: "q"))
         menu.autoenablesItems = false
         statusItem.menu = menu
     }
@@ -402,7 +406,7 @@ final class AppController: NSObject, NSApplicationDelegate {
         engineStatus = text
         statusLine.title = "状态：\(text)"
         statusItem.button?.image = NSImage(systemSymbolName: engineReady ? "mic" : "mic.slash",
-                                           accessibilityDescription: "Dazi")
+                                           accessibilityDescription: "Kaikou")
     }
 
     @objc private func openDashboard() { dashboard.show() }

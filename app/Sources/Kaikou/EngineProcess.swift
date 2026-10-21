@@ -62,7 +62,7 @@ final class EngineProcess {
             stdinPipe = stdin
             problem = nil
         } catch {
-            NSLog("DaziLow: failed to start engine: \(error)")
+            NSLog("Kaikou: failed to start engine: \(error)")
             report(.notInstalled)
         }
     }
@@ -96,7 +96,7 @@ final class EngineProcess {
         let now = Date()
         restarts = restarts.filter { now.timeIntervalSince($0) < 60 } + [now]
         guard restarts.count <= 5 else {
-            NSLog("DaziLow: engine keeps crashing (status \(status)); see \(Paths.engineLog.path)")
+            NSLog("Kaikou: engine keeps crashing (status \(status)); see \(Paths.engineLog.path)")
             report(.crashing)
             return
         }

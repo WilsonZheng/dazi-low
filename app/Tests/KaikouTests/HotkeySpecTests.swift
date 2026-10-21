@@ -1,5 +1,5 @@
 import XCTest
-@testable import DaziLow
+@testable import Kaikou
 
 final class HotkeySpecTests: XCTestCase {
     typealias B = HotkeySpec.Bits

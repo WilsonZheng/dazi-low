@@ -1,5 +1,5 @@
 import XCTest
-@testable import DaziLow
+@testable import Kaikou
 
 final class TokenDiffTests: XCTestCase {
     func testFindsWordReplacements() {

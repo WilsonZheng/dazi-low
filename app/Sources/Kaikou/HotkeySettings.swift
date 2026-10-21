@@ -4,7 +4,7 @@ import SwiftUI
 extension Notification.Name {
     /// Posted with `object: Bool` while the panel records a new shortcut, so the live
     /// shortcut does not start a dictation meanwhile.
-    static let daziHotkeyRecording = Notification.Name("DaziHotkeyRecording")
+    static let kaikouHotkeyRecording = Notification.Name("KaikouHotkeyRecording")
 }
 
 /// Captures the next shortcut pressed in the panel window.
@@ -20,7 +20,7 @@ final class HotkeyRecorder: ObservableObject {
         peak = 0
         message = "请按下新的快捷键（按 Esc 放弃）…"
         recording = true
-        NotificationCenter.default.post(name: .daziHotkeyRecording, object: true)
+        NotificationCenter.default.post(name: .kaikouHotkeyRecording, object: true)
         monitor = NSEvent.addLocalMonitorForEvents(matching: [.flagsChanged, .keyDown]) { [weak self] e in
             self?.handle(e)
             return nil // swallow while recording
@@ -30,7 +30,7 @@ final class HotkeyRecorder: ObservableObject {
     func stop() {
         if let m = monitor { NSEvent.removeMonitor(m) }
         monitor = nil
-        if recording { NotificationCenter.default.post(name: .daziHotkeyRecording, object: false) }
+        if recording { NotificationCenter.default.post(name: .kaikouHotkeyRecording, object: false) }
         recording = false
     }
 
@@ -104,7 +104,7 @@ struct SettingsView: View {
             }
             VStack(alignment: .leading, spacing: 4) {
                 Text("可以录：两个及以上修饰键的组合（如 左⌃ 左⇧、⌥⌘），右边的单个修饰键（如 右⌥），fn，或修饰键加一个键（如 ⌥Space、⌃`）。")
-                Text("修饰键加普通键的组合会被 Dazi 独占，不再输入到其他 App。录音时随时按 Esc 取消。")
+                Text("修饰键加普通键的组合会被 Kaikou 独占，不再输入到其他 App。录音时随时按 Esc 取消。")
                 Text("备用快捷键 ⌃⌥Space（按住说话）始终可用，不需要辅助功能权限。")
             }
             .font(.caption).foregroundStyle(.secondary)

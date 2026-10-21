@@ -1,7 +1,7 @@
 import AVFoundation
 import Foundation
 
-/// `DaziLow --transcribe file.wav [...]`: runs audio files through the same engine
+/// `Kaikou --transcribe file.wav [...]`: runs audio files through the same engine
 /// client the app uses and prints one JSON result per file. Needs no permissions,
 /// so the whole app-to-engine path can be tested headlessly. `--realtime` streams
 /// the audio at speaking pace, so background recognition overlaps as it does live.

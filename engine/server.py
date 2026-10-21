@@ -1,4 +1,4 @@
-"""Dazi engine: local speech-to-text + post-editing over a Unix socket.
+"""Kaikou engine: local speech-to-text + post-editing over a Unix socket.
 
 Protocol (newline-delimited JSON):
   client -> {"type":"hello"}
@@ -36,7 +36,7 @@ from lexicon import Lexicon, learned_path, record_learned  # noqa: E402
 from pipeline import Pipeline  # noqa: E402
 from segmenter import Segmenter  # noqa: E402
 
-log = logging.getLogger("dazi")
+log = logging.getLogger("kaikou")
 
 
 class Session:

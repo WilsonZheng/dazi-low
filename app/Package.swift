@@ -2,18 +2,18 @@
 import PackageDescription
 
 let package = Package(
-    name: "DaziLow",
+    name: "Kaikou",
     platforms: [.macOS(.v14)],
     targets: [
         .executableTarget(
-            name: "DaziLow",
-            path: "Sources/DaziLow",
+            name: "Kaikou",
+            path: "Sources/Kaikou",
             swiftSettings: [.unsafeFlags(["-O"])]
         ),
         .testTarget(
-            name: "DaziLowTests",
-            dependencies: ["DaziLow"],
-            path: "Tests/DaziLowTests"
+            name: "KaikouTests",
+            dependencies: ["Kaikou"],
+            path: "Tests/KaikouTests"
         ),
     ]
 )

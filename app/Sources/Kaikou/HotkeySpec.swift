@@ -22,7 +22,7 @@ struct HotkeySpec: Codable, Equatable {
     var mode: Mode
 
     static let `default` = HotkeySpec(modifiers: Bits.leftControl | Bits.leftShift, keyCode: nil, keyName: nil, mode: .toggle)
-    static let changed = Notification.Name("DaziHotkeyChanged")
+    static let changed = Notification.Name("KaikouHotkeyChanged")
     private static let defaultsKey = "hotkeySpec"
 
     enum Bits {
