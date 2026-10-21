@@ -47,14 +47,23 @@ final class HotkeyMonitor {
         machine.reset(keyStillDown: rightOptionDown || comboDown)
     }
 
-    /// Recovers from a missed key-up (e.g. released while secure input was on).
+    /// Recovers from a missed key-up (e.g. released while secure input was on). Uses the
+    /// device-independent Option flag, which is reliable for a physical key, and needs two
+    /// misses in a row so a single odd reading never ends a recording.
+    private var releasedTicks = 0
+
     func resyncPhysicalState() {
-        guard rightOptionDown, !comboDown else { return }
-        let flags = CGEventSource.flagsState(.combinedSessionState).rawValue
-        if flags & Self.rightOptionDeviceMask == 0 {
-            rightOptionDown = false
-            emit(machine.keyUp(at: ProcessInfo.processInfo.systemUptime))
+        guard rightOptionDown, !comboDown else { releasedTicks = 0; return }
+        if NSEvent.modifierFlags.contains(.option) {
+            releasedTicks = 0
+            return
         }
+        releasedTicks += 1
+        guard releasedTicks >= 2 else { return }
+        releasedTicks = 0
+        rightOptionDown = false
+        AppLog.write("resync: Option no longer held; treating as released")
+        emit(machine.keyUp(at: ProcessInfo.processInfo.systemUptime))
     }
 
     private func emit(_ action: HotkeyStateMachine.Action?) {
@@ -74,6 +83,7 @@ final class HotkeyMonitor {
             } else if rightOptionDown {
                 if !down { // the release was missed; the flags say it is up now
                     rightOptionDown = false
+                    AppLog.write("flagsChanged shows Right Option up without its own event")
                     emit(machine.keyUp(at: now))
                 } else {
                     emit(machine.otherKeyDown(at: now)) // another modifier: a shortcut chord

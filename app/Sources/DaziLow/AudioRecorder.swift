@@ -53,6 +53,7 @@ final class AudioRecorder {
                                  &id, UInt32(MemoryLayout<AudioDeviceID>.size))
         }
         try tapAndStart()
+        AppLog.write("mic started: \(engine.inputNode.outputFormat(forBus: 0))")
         isRunning = true
         configObserver = NotificationCenter.default.addObserver(
             forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main
@@ -93,6 +94,7 @@ final class AudioRecorder {
     /// pick the built-in mic). Re-tap with the new format on the same engine and device;
     /// never re-select the device here, which would trigger another change.
     private func handleConfigurationChange() {
+        AppLog.write("audio configuration changed (engine running: \(engine.isRunning), restarts \(restarts))")
         guard isRunning, !engine.isRunning, restarts < 3 else { return }
         restarts += 1
         engine.inputNode.removeTap(onBus: 0)

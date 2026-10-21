@@ -37,6 +37,24 @@ class FakePipeline:
         return {"text": " ".join(parts + [f"tail({session.n})"]), "raw": ",".join(session.edited), "timings": {}}
 
 
+class DeadlockTest(unittest.TestCase):
+    def test_background_edit_never_waits_for_queued_segments(self):
+        """Regression: advance_chunks ran on the GPU thread and blocked on a segment
+        future queued behind it, freezing the engine for good."""
+        import concurrent.futures as cf
+        import types
+        from pipeline import Pipeline
+        p = Pipeline.__new__(Pipeline)
+        pending = cf.Future()  # never completes, like a job queued behind us
+        s = types.SimpleNamespace(segments=[(0, 1, pending)], chunked=0, pending="", edited=[], continues=[],
+                                  app_name="", chunk_timings={})
+        done = []
+        t = __import__("threading").Thread(target=lambda: (p.advance_chunks(s), done.append(True)))
+        t.start(); t.join(2)
+        self.assertTrue(done, "advance_chunks blocked on an unfinished segment")
+        self.assertEqual(s.chunked, 0)
+
+
 class ServerProtocolTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp()

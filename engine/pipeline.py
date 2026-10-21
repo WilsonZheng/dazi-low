@@ -189,6 +189,10 @@ class Pipeline:
         only the rest is left to edit."""
         while session.chunked < len(session.segments):
             fut = session.segments[session.chunked][2]
+            # Runs on the single GPU thread: a segment queued behind this job is not
+            # done yet, and waiting for it here would deadlock the engine.
+            if not fut.done():
+                return
             try:
                 text = fut.result()[0]
             except Exception:

@@ -28,6 +28,8 @@ final class AppController: NSObject, NSApplicationDelegate {
     private var maxDurationTimer: DispatchWorkItem?
     private var resyncTimer: Timer?
     private var lastText: String?
+    /// Samples streamed for the current recording; only touched on `audioQueue`.
+    private var sentSamples = 0
     private let audioQueue = DispatchQueue(label: "dazi.audio.send")
 
     static let maxRecording: TimeInterval = 600
@@ -161,6 +163,7 @@ final class AppController: NSObject, NSApplicationDelegate {
             setStatus(msg["text"] as? String ?? (engineReady ? "就绪" : "加载中…"))
         case "result":
             let text = (msg["text"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            AppLog.write("result: \(text.count) chars, current=\((msg["id"] as? String) == currentID)")
             guard let id = msg["id"] as? String, id == currentID else {
                 // A late result (after the timeout) is still kept for "复制上一条".
                 if !text.isEmpty { lastText = text; lastItem.isEnabled = true }
@@ -185,6 +188,7 @@ final class AppController: NSObject, NSApplicationDelegate {
 
     private func deliver(_ text: String, target: pid_t?) {
         let front = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        AppLog.write("deliver: ax=\(AXIsProcessTrusted()) sameApp=\(target == nil || front == target)")
         if !AXIsProcessTrusted() {
             Paster.copy(text)
             hud.show(.message("已复制，按 ⌘V 粘贴"))
@@ -201,6 +205,7 @@ final class AppController: NSObject, NSApplicationDelegate {
     // MARK: - Recording
 
     private func handleHotkey(_ action: HotkeyStateMachine.Action) {
+        AppLog.write("hotkey \(action)")
         switch action {
         case .start: startRecording()
         case .commit: commitRecording()
@@ -211,6 +216,7 @@ final class AppController: NSObject, NSApplicationDelegate {
     }
 
     private func refuse(_ message: String) {
+        AppLog.write("refused: \(message)")
         hotkey.resetAfterExternalStop()
         hud.show(.message(message))
     }
@@ -241,6 +247,8 @@ final class AppController: NSObject, NSApplicationDelegate {
             return refuse(error.localizedDescription)
         }
         Sound.start()
+        audioQueue.async { self.sentSamples = 0 }
+        AppLog.write("recording started (front app \(front?.bundleIdentifier ?? "?"))")
         hud.show(.listening(handsFree: false))
         let limit = DispatchWorkItem { [weak self] in
             self?.hotkey.resetAfterExternalStop()
@@ -276,6 +284,8 @@ final class AppController: NSObject, NSApplicationDelegate {
 
     private func sendEnd(_ id: String, duration: TimeInterval) {
         guard currentID == id else { return }
+        AppLog.write(String(format: "recording ended: held %.2f s, audio sent %.2f s, mic restarts %d",
+                            duration, Double(sentSamplesSnapshot()) / 16000, recorder.restarts))
         if duration < 0.35 {
             engine.send(["type": "cancel", "id": id])
             finish()
@@ -286,8 +296,11 @@ final class AppController: NSObject, NSApplicationDelegate {
         engine.send(["type": "end", "id": id])
         let timeout = DispatchWorkItem { [weak self] in
             guard let self, self.currentID == id else { return }
+            AppLog.write("timeout waiting for result; restarting engine")
             self.finish()
-            self.hud.show(.message("超时，可在菜单里复制上一条"))
+            self.hud.show(.message("超时，已重启引擎，请重试"))
+            // No answer in time means the engine is stuck or overloaded: start it fresh.
+            self.restartEngine()
         }
         pendingTimeout = timeout
         DispatchQueue.main.asyncAfter(deadline: .now() + 30 + duration * 0.5, execute: timeout)
@@ -318,8 +331,13 @@ final class AppController: NSObject, NSApplicationDelegate {
                 pcm[i] = Int16(max(-1, min(1, samples[i])) * 32767)
             }
             let data = pcm.withUnsafeBufferPointer { Data(buffer: $0) }
+            self.sentSamples += samples.count
             self.engine.send(["type": "audio", "id": id, "pcm16": data.base64EncodedString()])
         }
+    }
+
+    private func sentSamplesSnapshot() -> Int {
+        audioQueue.sync { sentSamples }
     }
 
     // MARK: - Menu
@@ -396,8 +414,8 @@ final class AppController: NSObject, NSApplicationDelegate {
 }
 
 enum Sound {
-    private static let startSound: NSSound? = { let s = NSSound(named: "Tink"); s?.volume = 0.25; return s }()
-    private static let stopSound: NSSound? = { let s = NSSound(named: "Pop"); s?.volume = 0.25; return s }()
+    private static let startSound: NSSound? = { let s = NSSound(named: "Tink"); s?.volume = 0.5; return s }()
+    private static let stopSound: NSSound? = { let s = NSSound(named: "Pop"); s?.volume = 0.5; return s }()
     static func start() { startSound?.stop(); startSound?.play() }
     static func stop() { stopSound?.stop(); stopSound?.play() }
 }
