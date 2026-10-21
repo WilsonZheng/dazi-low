@@ -131,6 +131,13 @@ Final tuning on the eval set (99 clips): six personal Typeless examples instead 
 moved MER vs Typeless 32.2 → 31.9 and term recall 81.5 → 82.5; 300 recognizer hotwords
 instead of 220 lowered term recall (79.4) and was slower, so 220 stays.
 
+Tried and not adopted: giving the post-editor a second recognizer hypothesis (no
+hotwords) as `<alt>`. Over all clips it cut English WER 31.7 → 29.6 and raised term
+recall 81.5 → 83.1 with MER unchanged, but chunks of two hypotheses cannot be aligned
+safely (risk of duplicated sentences), and on short unchunked dictations it only moved
+MER 9.4 → 9.0 for +0.2–0.3 s. Short dictations (under 16 s) are already close to
+Typeless: MER 9.4 against Typeless's own output, 100% term recall.
+
 ## Quality, blind-judged
 
 A separate judge compared outputs pairwise without knowing which system wrote which.
