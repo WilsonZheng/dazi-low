@@ -50,8 +50,12 @@ class Session:
         self.segmenter = Segmenter(**seg_cfg)
         self.segments: list[tuple[int, int, cf.Future]] = []
         self.lang: str | None = None
-        self.prior: str | None = None          # post-edit of the transcript so far
-        self.prior_source: str | None = None
+        # Chunked editing while recording: edited text so far, the unfinished last
+        # sentence carried over, and how many segments have been consumed.
+        self.edited: list[str] = []
+        self.pending = ""
+        self.chunked = 0
+        self.chunk_timings: dict = {}
         self.ended = False
         self.cancelled = False
 
@@ -198,8 +202,8 @@ class Server:
                 start = s.segments[-1][1] if s.segments else 0
                 fut = self.submit(self.pipeline.recognize_segment, s, s.audio()[start:cut])
                 s.segments.append((start, cut, fut))
-                if self.cfg["prepolish"]:
-                    self.submit(self._prepolish, s)
+                if self.cfg["chunked"]:
+                    self.submit(self._advance_chunks, s)
         elif kind == "cancel" and sid in self.sessions:
             self._cancel(self.sessions.pop(sid))
         elif kind == "end" and sid in self.sessions:
@@ -212,13 +216,13 @@ class Server:
         for _, _, fut in s.segments:
             fut.cancel()
 
-    def _prepolish(self, s: Session) -> None:
-        if s.ended or s.cancelled or self.gpu_busy_elsewhere():
+    def _advance_chunks(self, s: Session) -> None:
+        if s.cancelled:
             return
         try:
-            self.pipeline.prepolish(s, should_stop=lambda: s.ended or s.cancelled or self.gpu_busy_elsewhere())
+            self.pipeline.advance_chunks(s)
         except Exception:
-            log.exception("background post-edit failed (ignored)")
+            log.exception("background edit failed; finalize will redo it")
 
     async def finish(self, s: Session) -> None:
         t_end = time.time()

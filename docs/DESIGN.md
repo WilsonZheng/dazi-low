@@ -60,10 +60,23 @@ exactly right.
 Qwen3-ASR 1.7B 8-bit wins; bf16 is no more accurate and half the speed. Whisper and
 Fun-ASR are weaker on Mandarin in published benchmarks (FLEURS zh CER 8.0–8.6 vs 7.1).
 
-Post-editor: Qwen3.5-4B is fast but not faithful (it answers the instructions it is
-supposed to edit). Qwen3.5-9B 4-bit is faithful (all 30 sampled outputs passed the guard)
-and brings term recall to ~97%. Larger models (Qwen3.6-35B-A3B, 20 GB) do not fit: the
-machine already runs with ~27 GB of swap in use, so the engine budget is ~8 GB.
+Post-editor, measured end to end with the real engine code (16 s live segments, the
+user's lexicon, 102 clips; "MER vs Typeless" = how far the final text is from what
+Typeless produced for the same recording, lower is closer):
+
+| Post-editor | MER vs Typeless | Term recall | Guard rejections | Decode speed |
+|---|---|---|---|---|
+| none (recognizer + rules only) | 39.4 | 81.5 | — | — |
+| **Qwen3-8B 4-bit** | **33.9** | 82.1 | **0 / 102** | 30.6 tok/s |
+| Qwen3.5-9B 4-bit | 35.2 | 83.1 | 9 / 102 | 28.5 tok/s |
+| Qwen3-4B-2507 8-bit | 37.9 | 81.5 | 5 / 102 | 32.0 tok/s |
+| Qwen3-4B-2507 4-bit | 40.9 | 82.6 | 7 / 102 | 36.3 tok/s |
+
+Qwen3-8B wins on closeness to Typeless and never trips the faithfulness guard; its
+standard attention also makes rejected prompt-lookup drafts free to discard (the 9B's
+DeltaNet layers must be replayed). Qwen3.5-4B (not in the table) answered the
+instructions it was meant to edit. Larger models do not fit: the machine already runs
+with ~17–27 GB of swap in use, so the engine budget is ~8 GB.
 
 ## Accuracy levers
 

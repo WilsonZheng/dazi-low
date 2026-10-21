@@ -10,7 +10,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from lexicon import Lexicon  # noqa: E402
 from guard import accept_polished, check, coverage, novelty  # noqa: E402
-from pipeline import clean_fillers, collapse_acronyms  # noqa: E402
+from pipeline import clean_fillers, collapse_acronyms, join_chunks, split_complete  # noqa: E402
 from segmenter import SR, Segmenter, has_speech, join_texts, session_language  # noqa: E402
 
 
@@ -137,6 +137,20 @@ class LeakTest(unittest.TestCase):
         self.assertTrue(r._leaked(leaked))
         spoken = "用 Orca、Vello、GitHub、PIMS 四个"
         self.assertFalse(r._leaked(spoken))
+
+
+class ChunkTest(unittest.TestCase):
+    def test_split_keeps_unfinished_sentence(self):
+        self.assertEqual(split_complete("你先修一下 CI。然后你就"), ("你先修一下 CI。", "然后你就"))
+        self.assertEqual(split_complete("你先修一下 CI。然后走流程。"), ("你先修一下 CI。", "然后走流程。"))
+        self.assertEqual(split_complete("没有标点的一句话"), ("", "没有标点的一句话"))
+
+    def test_join_continues_split_lists(self):
+        a = "你要做的事：\n\n1. 先 rebase\n2. 跑 migration"
+        b = "1. 写 release notes\n\n然后告诉我。"
+        self.assertEqual(join_chunks([a, b]),
+                         "你要做的事：\n\n1. 先 rebase\n2. 跑 migration\n3. 写 release notes\n\n然后告诉我。")
+        self.assertEqual(join_chunks(["第一段。", "", "第二段。"]), "第一段。\n\n第二段。")
 
 
 class FillerTest(unittest.TestCase):

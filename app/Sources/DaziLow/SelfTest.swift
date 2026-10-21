@@ -3,9 +3,10 @@ import Foundation
 
 /// `DaziLow --transcribe file.wav [...]`: runs audio files through the same engine
 /// client the app uses and prints one JSON result per file. Needs no permissions,
-/// so the whole app-to-engine path can be tested headlessly.
+/// so the whole app-to-engine path can be tested headlessly. `--realtime` streams
+/// the audio at speaking pace, so background recognition overlaps as it does live.
 enum SelfTest {
-    static func run(files: [String]) -> Int32 {
+    static func run(files: [String], realtime: Bool = false) -> Int32 {
         Paths.ensure()
         let engineProcess = EngineProcess()
         let client = EngineClient(socketPath: Paths.socket)
@@ -53,6 +54,7 @@ enum SelfTest {
                 let data = pcm.withUnsafeBufferPointer { Data(buffer: $0) }
                 client.send(["type": "audio", "id": id, "pcm16": data.base64EncodedString()])
                 i += 1600
+                if realtime { RunLoop.main.run(until: Date().addingTimeInterval(0.1)) }
             }
             let sent = Date()
             client.send(["type": "end", "id": id])

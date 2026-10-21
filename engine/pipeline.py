@@ -29,6 +29,50 @@ _STUTTER = re.compile(r"([我你他她它这那的了去给就是在把有要])\
 _REPEAT = re.compile(r"(然后|反正|就是|那个|这个|所以|但是)(?:[，,]?\s*\1)+")
 
 
+_SENTENCE_END = re.compile(r"[。！？!?]|\.(?=\s)")
+_LIST_ITEM = re.compile(r"^(\d+)\.\s")
+
+
+def split_complete(text: str) -> tuple[str, str]:
+    """Splits off the last sentence, which may continue in the next segment (cuts fall on
+    pauses, and the recognizer closes every segment with a period even mid-sentence)."""
+    body = text.rstrip()
+    if body and body[-1] in "。！？!?.":
+        body = body[:-1]
+    ends = [m.end() for m in _SENTENCE_END.finditer(body)]
+    if not ends:
+        return "", text.strip()
+    return text[: ends[-1]].strip(), text[ends[-1]:].strip()
+
+
+def join_chunks(chunks: list[str]) -> str:
+    """Joins separately edited chunks as paragraphs; a numbered list that a chunk boundary
+    split in two keeps counting (1. 2. | 1. -> 1. 2. 3.)."""
+    out: list[str] = []
+    last_num = 0
+    for chunk in [c.strip() for c in chunks if c.strip()]:
+        lines = chunk.split("\n")
+        first = _LIST_ITEM.match(lines[0])
+        continuing = last_num > 0 and first is not None and first.group(1) == "1"
+        if out:
+            out.append("" if not continuing else None)
+        for line in lines:
+            m = _LIST_ITEM.match(line)
+            if m and continuing:
+                last_num += 1
+                line = f"{last_num}. " + line[m.end():]
+            elif m:
+                last_num = int(m.group(1))
+            elif line.strip():
+                last_num = 0
+                continuing = False
+            out.append(line)
+        # keep counting only if the chunk ends on a list item
+        if not (lines and _LIST_ITEM.match(lines[-1])):
+            last_num = 0
+    return "\n".join(l for l in out if l is not None)
+
+
 def clean_fillers(text: str) -> str:
     """Deterministic cleanup for text that skipped the post-editor."""
     text = _FILLER.sub("", text)
@@ -91,64 +135,95 @@ class Pipeline:
             session.lang = session_language(text)
         return text, secs
 
-    def prepolish(self, session, should_stop) -> None:
-        """Post-edits the transcript so far while the user keeps talking; the result
-        becomes the draft source for the final post-edit (same output, fewer steps)."""
-        if not self.polisher:
-            return
-        done = [f.result()[0] for _, _, f in session.segments if f.done() and not f.exception()]
-        if len(done) != len(session.segments):
-            return
-        so_far = collapse_acronyms(self.lexicon.apply(join_texts(done)))
-        if len(so_far) < 30 or so_far == session.prior_source:
-            return
-        r = self.polisher.polish(user_message(so_far, session.app_name), source=so_far,
-                                 prior=session.prior, should_stop=should_stop)
-        if r.text:
-            session.prior, session.prior_source = r.text, so_far
+    def edit(self, raw: str, app_name: str, timings: dict | None = None) -> str:
+        """Post-edits one piece of transcript, with the guard and the minimal-edit retry."""
+        fixed = collapse_acronyms(self.lexicon.apply(raw))
+        if not self.polisher or not fixed.strip():
+            return fixed
+        t = timings if timings is not None else {}
+        r = self.polisher.polish(user_message(fixed, app_name), source=fixed)
+        t["polish_prefill"] = round(t.get("polish_prefill", 0) + r.prefill_s, 3)
+        t["polish_gen"] = round(t.get("polish_gen", 0) + r.gen_s, 3)
+        t["polish_tokens"] = t.get("polish_tokens", 0) + r.tokens
+        why = check(fixed, r.text, self.allowed) if r.complete else "incomplete"
+        if why:
+            # Never log dictated text; history (if enabled) has it.
+            log.warning("post-edit rejected (%s): %d -> %d chars, novelty %.2f; retrying minimal edit",
+                        why, len(fixed), len(r.text), novelty(fixed, r.text, self.allowed))
+            t["polish_rejected"] = t.get("polish_rejected", 0) + 1
+            r = self.polisher.polish(user_message(fixed, app_name), source=fixed, prompt="minimal")
+            why = check(fixed, r.text, self.allowed) if r.complete else "incomplete"
+            if why:
+                t["minimal_rejected"] = t.get("minimal_rejected", 0) + 1
+                return clean_fillers(fixed)
+            return clean_fillers(self.lexicon.apply(r.text))
+        return self.lexicon.apply(r.text)
+
+    def advance_chunks(self, session) -> None:
+        """Edits the finished part of the recording while the user keeps talking: every
+        recognized segment except its last (possibly unfinished) sentence. After release
+        only the rest is left to edit."""
+        while session.chunked < len(session.segments):
+            fut = session.segments[session.chunked][2]
+            try:
+                text = fut.result()[0]
+            except Exception:
+                return  # finalize re-recognizes failed segments
+            session.chunked += 1
+            pending = join_texts([session.pending, text]) if session.pending else text
+            complete, session.pending = split_complete(pending)
+            if len(complete) >= 15:
+                session.edited.append(self.edit(complete, session.app_name, session.chunk_timings))
+            else:
+                session.pending = pending
 
     # ---------- after release ----------
 
     def finalize(self, session) -> dict:
         t0 = time.perf_counter()
         audio = session.audio()
-        parts, seg_time = [], 0.0
+        seg_time = 0.0
         start = 0
-        for s_start, s_end, fut in session.segments:
+        for k, (s_start, s_end, fut) in enumerate(session.segments):
             try:
-                text, secs = fut.result()
+                seg_time += fut.result()[1]
             except Exception:
                 log.exception("segment failed; recognizing it again")
-                text, secs = self.recognize_segment(session, audio[s_start:s_end])
-            parts.append(text)
-            seg_time += secs
+                done = _Done(self.recognize_segment(session, audio[s_start:s_end]))
+                session.segments[k] = (s_start, s_end, done)
             start = s_end
         tail_audio = audio[start:]
         tail, tail_time = ("", 0.0)
         if not session.segments or has_speech(tail_audio, session.segmenter.levels()):
             tail, tail_time = self.asr.transcribe(tail_audio, language=session.lang)
-        parts.append(tail)
-        raw = join_texts(parts)
-        fixed = collapse_acronyms(self.lexicon.apply(raw))
+        raw = join_texts([f.result()[0] for _, _, f in session.segments] + [tail])
         timings = {"segments": len(session.segments), "asr_bg": round(seg_time, 3), "asr_tail": round(tail_time, 3)}
-        text = fixed
-        if self.polisher and fixed.strip():
-            r = self.polisher.polish(user_message(fixed, session.app_name), source=fixed, prior=session.prior)
-            timings.update(polish_prefill=round(r.prefill_s, 3), polish_gen=round(r.gen_s, 3),
-                           polish_tokens=r.tokens, polish_steps=r.steps, prior=bool(session.prior))
-            why = check(fixed, r.text, self.allowed) if r.complete else "incomplete"
-            if why:
-                # Never log dictated text; history (if enabled) has it.
-                log.warning("post-edit rejected (%s): %d -> %d chars, novelty %.2f; retrying minimal edit",
-                            why, len(fixed), len(r.text), novelty(fixed, r.text, self.allowed))
-                timings["polish_rejected"] = why
-                r = self.polisher.polish(user_message(fixed, session.app_name), source=fixed, prompt="minimal")
-                timings["minimal_gen"] = round(r.gen_s, 3)
-                why = check(fixed, r.text, self.allowed) if r.complete else "incomplete"
-                if why:
-                    timings["minimal_rejected"] = why
-            text = self.lexicon.apply(r.text) if not why else clean_fillers(fixed)
-            if not why and timings.get("polish_rejected"):
-                text = clean_fillers(text)  # the minimal edit sometimes keeps fillers
+
+        if self.cfg.get("chunked", True) and session.segments:
+            self.advance_chunks(session)  # anything the background did not get to
+            rest = join_texts([session.pending, tail]) if session.pending else tail
+            last = self.edit(rest, session.app_name, timings) if rest.strip() else ""
+            text = join_chunks(session.edited + [last])
+            timings["chunks"] = len(session.edited) + 1
+            for k, v in session.chunk_timings.items():
+                timings["bg_" + k] = v
+        else:
+            text = self.edit(raw, session.app_name, timings)
         timings["total_engine"] = round(time.perf_counter() - t0, 3)
         return {"text": text, "raw": raw, "timings": timings}
+
+
+class _Done:
+    """A finished future holding a value (for segments recognized again in finalize)."""
+
+    def __init__(self, value):
+        self.value = value
+
+    def result(self):
+        return self.value
+
+    def done(self):
+        return True
+
+    def exception(self):
+        return None

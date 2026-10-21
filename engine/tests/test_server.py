@@ -26,15 +26,15 @@ class FakePipeline:
         self.recognized.append(len(audio))
         return f"seg{len(self.recognized)}", 0.01
 
-    def prepolish(self, session, should_stop):
-        session.prior = "prior"
+    def advance_chunks(self, session):
+        session.edited.append("chunk")
 
     def lexicon_changed(self, path):
         return False
 
     def finalize(self, session):
         parts = [f.result()[0] for _, _, f in session.segments]
-        return {"text": " ".join(parts + [f"tail({session.n})"]), "raw": session.prior or "", "timings": {}}
+        return {"text": " ".join(parts + [f"tail({session.n})"]), "raw": ",".join(session.edited), "timings": {}}
 
 
 class ServerProtocolTest(unittest.TestCase):
@@ -85,7 +85,7 @@ class ServerProtocolTest(unittest.TestCase):
             self.assertEqual(res["id"], "a")
             self.assertTrue(res["text"].startswith("seg1 tail("), res["text"])
             self.assertIn("after_release", res["timings"])
-            self.assertEqual(res["raw"], "prior", "background post-edit ran")
+            self.assertEqual(res["raw"], "chunk", "background edit ran")
 
             # Cancelled sessions produce nothing.
             self.send(writer, {"type": "begin", "id": "b"})

@@ -2,7 +2,8 @@ import AppKit
 
 let args = CommandLine.arguments
 if let i = args.firstIndex(of: "--transcribe") {
-    exit(SelfTest.run(files: Array(args[(i + 1)...])))
+    let rest = Array(args[(i + 1)...])
+    exit(SelfTest.run(files: rest.filter { $0 != "--realtime" }, realtime: rest.contains("--realtime")))
 }
 
 let app = NSApplication.shared
