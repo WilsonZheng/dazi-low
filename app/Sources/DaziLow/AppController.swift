@@ -28,7 +28,6 @@ final class AppController: NSObject, NSApplicationDelegate {
     private var recordingStarted = Date()
     private var pendingTimeout: DispatchWorkItem?
     private var maxDurationTimer: DispatchWorkItem?
-    private var resyncTimer: Timer?
     private var lastText: String?
     /// Samples streamed for the current recording; only touched on `audioQueue`.
     private var sentSamples = 0
@@ -79,6 +78,13 @@ final class AppController: NSObject, NSApplicationDelegate {
         enableLaunchAtLoginOnce()
     }
 
+    /// Opening Dazi again (Spotlight, Finder, `open`) while it runs shows the panel, for
+    /// when the menu-bar icon is hidden behind the notch.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        dashboard.show()
+        return false
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
         engineProcess.stop()
     }
@@ -127,7 +133,7 @@ final class AppController: NSObject, NSApplicationDelegate {
     private func updatePermissionLine() {
         permissionLine.isHidden = axTrusted
         permissionLine.title = hotkey.comboRegistered
-            ? "未开辅助功能：只能用 ⌃⌥Space，结果需手动 ⌘V（点此打开设置）"
+            ? "未开辅助功能：⌃⇧ 不可用，按住 ⌃⌥Space 说话，结果需手动 ⌘V（点此打开设置）"
             : "未开辅助功能：快捷键不可用（点此打开设置）"
     }
 
@@ -270,19 +276,11 @@ final class AppController: NSObject, NSApplicationDelegate {
         }
         maxDurationTimer = limit
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.maxRecording, execute: limit)
-        resyncTimer?.invalidate()
-        // Synthetic test key presses have no physical state to resync against.
-        if ProcessInfo.processInfo.environment["DAZI_FAKE_MIC"] == nil {
-            resyncTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
-                self?.hotkey.resyncPhysicalState()
-            }
-        }
     }
 
     private func commitRecording() {
         guard let id = currentID, recorder.isRunning else { return }
         maxDurationTimer?.cancel()
-        resyncTimer?.invalidate()
         hud.show(.processing)
         let duration = Date().timeIntervalSince(recordingStarted)
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.tailPadding) { [weak self] in
@@ -332,7 +330,6 @@ final class AppController: NSObject, NSApplicationDelegate {
     private func finish() {
         pendingTimeout?.cancel()
         maxDurationTimer?.cancel()
-        resyncTimer?.invalidate()
         currentID = nil
         targetPID = nil
     }
@@ -364,7 +361,7 @@ final class AppController: NSObject, NSApplicationDelegate {
         menu.addItem(statusLine)
         permissionLine.target = self
         menu.addItem(permissionLine)
-        let help = NSMenuItem(title: "按住右侧 ⌥（或 ⌃⌥Space）说话，松开插入；轻点为免提，Esc 取消", action: nil, keyEquivalent: "")
+        let help = NSMenuItem(title: "按一下左 ⌃+⇧ 开始说话，再按一下结束；Esc 取消", action: nil, keyEquivalent: "")
         help.isEnabled = false
         menu.addItem(help)
         menu.addItem(.separator())

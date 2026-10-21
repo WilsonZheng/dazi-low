@@ -30,6 +30,18 @@ struct HotkeyStateMachine {
     var chordWindow: TimeInterval = 1.0
     private(set) var state: State = .idle
 
+    /// Toggle-style trigger (a press of a key combo): starts when idle, finishes when recording.
+    mutating func toggle() -> Action? {
+        switch state {
+        case .idle, .swallowingRelease:
+            state = .handsFree
+            return .start
+        case .handsFree, .holding:
+            state = .idle
+            return .commit
+        }
+    }
+
     mutating func keyDown(at t: TimeInterval) -> Action? {
         switch state {
         case .idle:

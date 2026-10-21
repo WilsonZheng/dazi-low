@@ -2,26 +2,32 @@ import AppKit
 import Carbon.HIToolbox
 
 /// Feeds `HotkeyStateMachine` from two sources:
-/// - Right Option alone, via NSEvent monitors (needs the Accessibility permission).
-/// - ⌃⌥Space, via a Carbon hot key, which works without any permission, so dictation
-///   still works (copy-to-clipboard mode) before Accessibility is granted.
+/// - Left Control + Shift pressed together and released (a tap of the combo, nothing
+///   else pressed): starts recording; the next tap finishes it. Needs Accessibility.
+/// - ⌃⌥Space held, via a Carbon hot key, which works without any permission, so
+///   dictation still works (copy-to-clipboard mode) before Accessibility is granted.
 final class HotkeyMonitor {
-    private static let rightOptionKeyCode: UInt16 = 61
     private static let escapeKeyCode: UInt16 = 53
-    /// NX_DEVICERALTKEYMASK: set while the right Option key is physically down.
-    private static let rightOptionDeviceMask: UInt64 = 0x40
+    // Device-dependent modifier bits (NX_DEVICE*KEYMASK).
+    private static let leftControlMask: UInt = 0x0001
+    private static let shiftMasks: UInt = 0x0002 | 0x0004
+    /// A combo held longer than this is someone holding keys, not a tap.
+    private static let maxTap: TimeInterval = 1.0
 
     var onAction: ((HotkeyStateMachine.Action) -> Void)?
 
     private var machine = HotkeyStateMachine()
     private var monitors: [Any] = []
-    private var rightOptionDown = false
     private var comboDown = false
     private var hotKeyRef: EventHotKeyRef?
     private var handlerRef: EventHandlerRef?
 
+    // Left Control + Shift tap tracking.
+    private var chordDown = false
+    private var chordStart: TimeInterval = 0
+    private var chordSpoiled = false
+
     var isRecording: Bool { machine.isRecording }
-    var isHolding: Bool { if case .holding = machine.state { return true }; return false }
 
     func start() {
         installMonitors()
@@ -44,26 +50,7 @@ final class HotkeyMonitor {
 
     /// Called when the app ends a recording on its own (time limit, error, busy).
     func resetAfterExternalStop() {
-        machine.reset(keyStillDown: rightOptionDown || comboDown)
-    }
-
-    /// Recovers from a missed key-up (e.g. released while secure input was on). Uses the
-    /// device-independent Option flag, which is reliable for a physical key, and needs two
-    /// misses in a row so a single odd reading never ends a recording.
-    private var releasedTicks = 0
-
-    func resyncPhysicalState() {
-        guard rightOptionDown, !comboDown else { releasedTicks = 0; return }
-        if NSEvent.modifierFlags.contains(.option) {
-            releasedTicks = 0
-            return
-        }
-        releasedTicks += 1
-        guard releasedTicks >= 2 else { return }
-        releasedTicks = 0
-        rightOptionDown = false
-        AppLog.write("resync: Option no longer held; treating as released")
-        emit(machine.keyUp(at: ProcessInfo.processInfo.systemUptime))
+        machine.reset(keyStillDown: comboDown)
     }
 
     private func emit(_ action: HotkeyStateMachine.Action?) {
@@ -71,32 +58,45 @@ final class HotkeyMonitor {
     }
 
     private func handle(_ event: NSEvent) {
-        // event.timestamp shares systemUptime's clock and is immune to main-thread stalls.
-        let now = event.timestamp
         switch event.type {
         case .flagsChanged:
-            let down = UInt64(event.modifierFlags.rawValue) & Self.rightOptionDeviceMask != 0
-            if event.keyCode == Self.rightOptionKeyCode {
-                guard down != rightOptionDown else { return }
-                rightOptionDown = down
-                emit(down ? machine.keyDown(at: now) : machine.keyUp(at: now))
-            } else if rightOptionDown {
-                if !down { // the release was missed; the flags say it is up now
-                    rightOptionDown = false
-                    AppLog.write("flagsChanged shows Right Option up without its own event")
-                    emit(machine.keyUp(at: now))
-                } else {
-                    emit(machine.otherKeyDown(at: now)) // another modifier: a shortcut chord
-                }
-            }
+            handleModifiers(event)
         case .keyDown:
+            if chordDown { chordSpoiled = true } // ⌃⇧ + a key is a shortcut, not our tap
             if event.keyCode == Self.escapeKeyCode {
-                emit(machine.escape(keyStillDown: rightOptionDown || comboDown))
+                emit(machine.escape(keyStillDown: comboDown))
             } else if !comboDown {
-                emit(machine.otherKeyDown(at: now))
+                emit(machine.otherKeyDown(at: event.timestamp))
             }
         default:
             break
+        }
+    }
+
+    private func handleModifiers(_ event: NSEvent) {
+        let raw = event.modifierFlags.rawValue
+        let flags = event.modifierFlags
+        let leftControl = raw & Self.leftControlMask != 0
+        let shift = raw & Self.shiftMasks != 0
+        let others = flags.contains(.option) || flags.contains(.command) || flags.contains(.function)
+        if leftControl && shift {
+            if !chordDown {
+                chordDown = true
+                chordStart = event.timestamp
+                chordSpoiled = others
+            } else if others {
+                chordSpoiled = true
+            }
+            return
+        }
+        guard chordDown else { return }
+        // The combo was broken by releasing one of its keys: that is the tap.
+        chordDown = false
+        let quick = event.timestamp - chordStart <= Self.maxTap
+        if !chordSpoiled && quick {
+            emit(machine.toggle())
+        } else {
+            AppLog.write("⌃⇧ ignored (spoiled \(chordSpoiled), quick \(quick))")
         }
     }
 

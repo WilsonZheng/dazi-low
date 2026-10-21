@@ -51,6 +51,18 @@ final class HotkeyStateMachineTests: XCTestCase {
         XCTAssertNil(m.escape(keyStillDown: false))
     }
 
+    func testToggleStartsAndFinishes() {
+        var m = HotkeyStateMachine()
+        XCTAssertEqual(m.toggle(), .start)
+        XCTAssertTrue(m.isRecording)
+        XCTAssertNil(m.otherKeyDown(at: 1), "typing while recording does not cancel")
+        XCTAssertEqual(m.toggle(), .commit)
+        XCTAssertFalse(m.isRecording)
+        XCTAssertEqual(m.toggle(), .start)
+        XCTAssertEqual(m.escape(keyStillDown: false), .cancel)
+        XCTAssertEqual(m.toggle(), .start, "after a cancel the next press starts again")
+    }
+
     func testResetWhileHeldSwallowsRelease() {
         var m = HotkeyStateMachine()
         _ = m.keyDown(at: 0)

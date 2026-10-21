@@ -22,7 +22,7 @@ final class HUD {
     private(set) var mode: Mode = .hidden
 
     init() {
-        panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 300, height: 44),
+        panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 340, height: 44),
                         styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
         panel.isFloatingPanel = true
         panel.level = .statusBar
@@ -54,8 +54,8 @@ final class HUD {
 
         hint.font = .systemFont(ofSize: 11, weight: .regular)
         hint.textColor = NSColor.white.withAlphaComponent(0.55)
-        hint.stringValue = "Esc 取消"
-        hint.frame = NSRect(x: 232, y: 14, width: 56, height: 16)
+        hint.stringValue = "⌃⇧ 结束 · Esc 取消"
+        hint.frame = NSRect(x: 232, y: 14, width: 100, height: 16)
         bg.addSubview(hint)
     }
 
@@ -107,7 +107,7 @@ final class HUD {
     private func layout(message: Bool) {
         if message {
             label.alignment = .center
-            label.frame = NSRect(x: 14, y: 13, width: 272, height: 18)
+            label.frame = NSRect(x: 14, y: 13, width: 312, height: 18)
         } else {
             label.alignment = .right
             label.frame = NSRect(x: 168, y: 13, width: 58, height: 18)
@@ -120,7 +120,7 @@ final class HUD {
         wave.push(CGFloat(levelProvider?() ?? 0))
         let secs = Int(Date().timeIntervalSince(startedAt))
         let t = String(format: "%d:%02d", secs / 60, secs % 60)
-        label.stringValue = handsFree ? "免提 \(t)" : t
+        label.stringValue = t
     }
 
     private func position() {
