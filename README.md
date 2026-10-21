@@ -31,7 +31,13 @@
 - **麦克风**：用来听你说话。
 - **辅助功能**：用来监听右侧 ⌥，以及把文字粘贴到其他 App。
 
-没有辅助功能权限时也能用：按住 ⌃⌥Space 说话，松开后文字会放进剪贴板，自己按 ⌘V 粘贴。权限一打开，App 会自动切换到右侧 ⌥ 和自动粘贴，不用重启。
+**公司管理的 Mac 上开辅助功能需要管理员**。这种情况下不用申请：只要从一个已经有辅助功能和麦克风权限的终端（比如 Orca）里启动 Dazi，它就沿用那个终端的权限。`scripts/dazi-ensure` 做的就是这件事：如果 Dazi 没在运行，或者在运行但没有权限，就从当前终端重新启动它。安装脚本会把它链接到 `~/.local/bin/dazi-ensure`，在 `~/.zshrc` 里加一行，让每次打开 Orca 终端时自动在后台运行一下：
+
+```bash
+[[ "$TERM_PROGRAM" == "Orca" && -x "$HOME/.local/bin/dazi-ensure" ]] && ( "$HOME/.local/bin/dazi-ensure" >/dev/null 2>&1 & )
+```
+
+完全没有辅助功能权限时也能用：按住 ⌃⌥Space 说话，松开后文字会放进剪贴板，自己按 ⌘V 粘贴。权限一打开，App 会自动切换到右侧 ⌥ 和自动粘贴，不用重启。
 
 每次重新编译安装后，macOS 会把它当成新的 App，需要在设置里把这两项权限重新打开一次。
 
@@ -61,4 +67,13 @@ swift test --package-path app                                   # App 单元测�
 ./scripts/build_app.sh                                          # 只编译 App
 ```
 
-引擎日志在 `~/Library/Logs/DaziLow/engine.log`。
+引擎日志在 `~/Library/Logs/DaziLow/engine.log`，当前权限和引擎状态在 `~/Library/Application Support/DaziLow/status.json`。
+
+不需要任何权限的自测：
+
+```bash
+~/Applications/DaziLow.app/Contents/MacOS/DaziLow --mic-test 3                        # 麦克风录 3 秒
+~/Applications/DaziLow.app/Contents/MacOS/DaziLow --transcribe --realtime a.wav b.wav  # 按真实语速走完整链路
+```
+
+`./scripts/install.sh` 默认只更新引擎（放在 App 包外面），不会改动 App 的签名，所以权限不会丢；加 `--app` 才会重装 App。

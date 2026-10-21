@@ -13,10 +13,17 @@ enum Paths {
     static var history: URL { support.appendingPathComponent("history", isDirectory: true) }
     static var engineLog: URL { logs.appendingPathComponent("engine.log") }
 
-    /// Engine sources ship inside the app bundle; `DAZI_ENGINE_DIR` overrides for development.
+    /// Engine sources: `DAZI_ENGINE_DIR` (development), else the copy the installer puts in
+    /// Application Support, else the one inside the bundle. Keeping the engine outside the
+    /// bundle means engine updates do not change the app's signature, so macOS keeps the
+    /// Microphone and Accessibility grants.
     static var engineDir: URL {
         if let dev = ProcessInfo.processInfo.environment["DAZI_ENGINE_DIR"] {
             return URL(fileURLWithPath: dev, isDirectory: true)
+        }
+        let installed = support.appendingPathComponent("engine", isDirectory: true)
+        if FileManager.default.fileExists(atPath: installed.appendingPathComponent("server.py").path) {
+            return installed
         }
         return Bundle.main.resourceURL!.appendingPathComponent("engine", isDirectory: true)
     }

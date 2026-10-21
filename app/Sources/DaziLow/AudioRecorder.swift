@@ -13,6 +13,7 @@ final class AudioRecorder {
     /// RMS level of the latest chunk, 0...1, for the HUD.
     private(set) var level: Float = 0
     private(set) var isRunning = false
+    private(set) var restarts = 0
 
     private var engine = AVAudioEngine()
     private var converter: AVAudioConverter?
@@ -21,6 +22,7 @@ final class AudioRecorder {
 
     func start() throws {
         guard !isRunning else { return }
+        restarts = 0
         // A fresh engine every time: a reused one can hold a stale input format after a
         // device change, and installTap then raises an Objective-C exception.
         engine = AVAudioEngine()
@@ -29,6 +31,24 @@ final class AudioRecorder {
             AudioUnitSetProperty(unit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0,
                                  &id, UInt32(MemoryLayout<AudioDeviceID>.size))
         }
+        try tapAndStart()
+        isRunning = true
+        configObserver = NotificationCenter.default.addObserver(
+            forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main
+        ) { [weak self] _ in self?.handleConfigurationChange() }
+    }
+
+    func stop() {
+        guard isRunning else { return }
+        if let o = configObserver { NotificationCenter.default.removeObserver(o) }
+        configObserver = nil
+        engine.inputNode.removeTap(onBus: 0)
+        engine.stop()
+        isRunning = false
+        level = 0
+    }
+
+    private func tapAndStart() throws {
         let input = engine.inputNode
         let inFormat = input.outputFormat(forBus: 0)
         guard inFormat.sampleRate > 0, inFormat.channelCount > 0 else {
@@ -40,29 +60,20 @@ final class AudioRecorder {
         }
         engine.prepare()
         try engine.start()
-        isRunning = true
-        configObserver = NotificationCenter.default.addObserver(
-            forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main
-        ) { [weak self] _ in
-            // The device changed under us (headset plugged in, etc.): re-tap with the new format.
-            guard let self, self.isRunning else { return }
-            self.teardown()
-            try? self.start()
-        }
     }
 
-    func stop() {
-        guard isRunning else { return }
-        teardown()
-        level = 0
-    }
-
-    private func teardown() {
-        if let o = configObserver { NotificationCenter.default.removeObserver(o) }
-        configObserver = nil
+    /// The engine stops itself when the input hardware changes (including right after we
+    /// pick the built-in mic). Re-tap with the new format on the same engine and device;
+    /// never re-select the device here, which would trigger another change.
+    private func handleConfigurationChange() {
+        guard isRunning, !engine.isRunning, restarts < 3 else { return }
+        restarts += 1
         engine.inputNode.removeTap(onBus: 0)
-        engine.stop()
-        isRunning = false
+        do {
+            try tapAndStart()
+        } catch {
+            NSLog("DaziLow: audio restart failed: \(error)")
+        }
     }
 
     private func convert(_ buffer: AVAudioPCMBuffer) {

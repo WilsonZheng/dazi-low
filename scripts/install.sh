@@ -9,6 +9,10 @@ mkdir -p "$SUPPORT" "$HOME/Applications" "$HOME/Library/Logs/DaziLow"
 
 "$ROOT/scripts/build_app.sh"
 
+echo "==> engine code (outside the app bundle, so updates keep macOS permissions)"
+mkdir -p "$SUPPORT/engine"
+cp "$ROOT"/engine/*.py "$ROOT/engine/requirements.txt" "$SUPPORT/engine/"
+
 echo "==> engine environment"
 if [ ! -x "$SUPPORT/venv/bin/python" ]; then
   uv venv --quiet --python 3.12 "$SUPPORT/venv"
@@ -31,7 +35,17 @@ if [ ! -f "$SUPPORT/lexicon.json" ]; then
   echo '{"terms": [], "replacements": [], "examples": []}' > "$SUPPORT/lexicon.json"
 fi
 
+mkdir -p "$HOME/.local/bin"
+ln -sf "$ROOT/scripts/dazi-ensure" "$HOME/.local/bin/dazi-ensure"
+
 echo "==> installing app"
+if [ -d "$DEST" ] && [ "${1:-}" != "--app" ]; then
+  # Replacing the app changes its signature and macOS drops its permissions, so only
+  # the engine is updated unless --app is given.
+  echo "app already installed; engine updated. Restart the engine from the menu (重启引擎)."
+  echo "Pass --app to reinstall the app too (then re-enable its permissions)."
+  exit 0
+fi
 pkill -x DaziLow 2>/dev/null && sleep 1 || true
 rm -rf "$DEST"
 ditto "$ROOT/build/DaziLow.app" "$DEST"

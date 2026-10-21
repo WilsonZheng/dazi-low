@@ -35,6 +35,13 @@ final class AppController: NSObject, NSApplicationDelegate {
     static let tailPadding: TimeInterval = 0.2
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // One copy only: a second launch (login item vs. terminal) just exits.
+        let me = ProcessInfo.processInfo.processIdentifier
+        if let id = Bundle.main.bundleIdentifier,
+           NSRunningApplication.runningApplications(withBundleIdentifier: id).contains(where: { $0.processIdentifier != me }) {
+            NSApp.terminate(nil)
+            return
+        }
         Paths.ensure()
         setupStatusItem()
         hud.levelProvider = { [weak self] in self?.recorder.level ?? 0 }
@@ -74,6 +81,7 @@ final class AppController: NSObject, NSApplicationDelegate {
             AVCaptureDevice.requestAccess(for: .audio) { _ in }
         }
         // Accessibility can be granted at any time; pick it up without a relaunch.
+        writeStatus()
         Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] t in
             guard let self else { t.invalidate(); return }
             let now = AXIsProcessTrusted()
@@ -82,6 +90,25 @@ final class AppController: NSObject, NSApplicationDelegate {
                 if now { self.hotkey.installMonitors() }
                 self.updatePermissionLine()
             }
+            self.writeStatus()
+        }
+    }
+
+    /// status.json lets scripts (and the user) check what works without opening menus.
+    private func writeStatus() {
+        let mic: String
+        switch AVCaptureDevice.authorizationStatus(for: .audio) {
+        case .authorized: mic = "granted"
+        case .denied, .restricted: mic = "denied"
+        default: mic = "not asked"
+        }
+        let status: [String: Any] = [
+            "accessibility": axTrusted, "microphone": mic, "engine_ready": engineReady,
+            "engine_status": engineStatus, "fallback_hotkey_registered": hotkey.comboRegistered,
+            "updated": ISO8601DateFormatter().string(from: Date()),
+        ]
+        if let data = try? JSONSerialization.data(withJSONObject: status, options: [.prettyPrinted, .sortedKeys]) {
+            try? data.write(to: Paths.support.appendingPathComponent("status.json"), options: .atomic)
         }
     }
 
