@@ -54,7 +54,7 @@ final class HUD {
 
         hint.font = .systemFont(ofSize: 11, weight: .regular)
         hint.textColor = NSColor.white.withAlphaComponent(0.55)
-        hint.stringValue = "⌃⇧ 结束 · Esc 取消"
+        hint.stringValue = HotkeySpec.load().hint
         hint.frame = NSRect(x: 232, y: 14, width: 100, height: 16)
         bg.addSubview(hint)
     }
@@ -96,6 +96,10 @@ final class HUD {
         }
         position()
         panel.orderFrontRegardless()
+    }
+
+    func setHint(_ text: String) {
+        hint.stringValue = text
     }
 
     func setHandsFree(_ on: Bool) {

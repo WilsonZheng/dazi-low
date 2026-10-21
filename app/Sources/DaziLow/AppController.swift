@@ -17,6 +17,7 @@ final class AppController: NSObject, NSApplicationDelegate {
     private let permissionLine = NSMenuItem(title: "", action: #selector(openAccessibilitySettings), keyEquivalent: "")
     private let lastItem = NSMenuItem(title: "复制上一条", action: #selector(copyLast), keyEquivalent: "")
     private let loginItem = NSMenuItem(title: "登录时自动启动", action: #selector(toggleLogin), keyEquivalent: "")
+    private let helpItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
 
     private var engineReady = false
     private var engineStatus = "启动中…"
@@ -72,6 +73,16 @@ final class AppController: NSObject, NSApplicationDelegate {
         }
         hotkey.onAction = { [weak self] action in self?.handleHotkey(action) }
         hotkey.start()
+        NotificationCenter.default.addObserver(forName: HotkeySpec.changed, object: nil, queue: .main) { [weak self] _ in
+            guard let self else { return }
+            DispatchQueue.main.async { // after the monitor reloaded the spec
+                self.helpItem.title = self.hotkey.spec.help
+                self.hud.setHint(self.hotkey.spec.hint)
+            }
+        }
+        NotificationCenter.default.addObserver(forName: .daziHotkeyRecording, object: nil, queue: .main) { [weak self] n in
+            self?.hotkey.paused = (n.object as? Bool) ?? false
+        }
         if !hotkey.comboRegistered { NSLog("DaziLow: ⌃⌥Space is taken by another app") }
 
         requestPermissions()
@@ -133,7 +144,7 @@ final class AppController: NSObject, NSApplicationDelegate {
     private func updatePermissionLine() {
         permissionLine.isHidden = axTrusted
         permissionLine.title = hotkey.comboRegistered
-            ? "未开辅助功能：⌃⇧ 不可用，按住 ⌃⌥Space 说话，结果需手动 ⌘V（点此打开设置）"
+            ? "未开辅助功能：只能按住 ⌃⌥Space 说话，结果需手动 ⌘V（点此打开设置）"
             : "未开辅助功能：快捷键不可用（点此打开设置）"
     }
 
@@ -361,9 +372,9 @@ final class AppController: NSObject, NSApplicationDelegate {
         menu.addItem(statusLine)
         permissionLine.target = self
         menu.addItem(permissionLine)
-        let help = NSMenuItem(title: "按一下左 ⌃+⇧ 开始说话，再按一下结束；Esc 取消", action: nil, keyEquivalent: "")
-        help.isEnabled = false
-        menu.addItem(help)
+        helpItem.title = hotkey.spec.help
+        helpItem.isEnabled = false
+        menu.addItem(helpItem)
         menu.addItem(.separator())
         menu.addItem(item("打开面板（词库、统计、历史）…", #selector(openDashboard), key: ","))
         lastItem.target = self

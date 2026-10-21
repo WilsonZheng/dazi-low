@@ -173,6 +173,7 @@ struct DashboardView: View {
             OverviewView(store: store).tabItem { Text("概览") }.tag(0)
             VocabularyView(store: store).tabItem { Text("词库") }.tag(1)
             HistoryView(store: store).tabItem { Text("历史") }.tag(2)
+            SettingsView().tabItem { Text("设置") }.tag(3)
         }
         .padding(16)
         .frame(minWidth: 640, minHeight: 520)

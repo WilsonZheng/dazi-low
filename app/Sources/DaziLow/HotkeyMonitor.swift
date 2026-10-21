@@ -1,37 +1,51 @@
 import AppKit
 import Carbon.HIToolbox
 
-/// Feeds `HotkeyStateMachine` from two sources:
-/// - Left Control + Shift pressed together and released (a tap of the combo, nothing
-///   else pressed): starts recording; the next tap finishes it. Needs Accessibility.
-/// - ⌃⌥Space held, via a Carbon hot key, which works without any permission, so
-///   dictation still works (copy-to-clipboard mode) before Accessibility is granted.
+/// Feeds `HotkeyStateMachine` from the user's shortcut (`HotkeySpec`, editable in the
+/// panel) plus ⌃⌥Space held as a fallback that needs no permission (copy-to-clipboard
+/// mode before Accessibility is granted).
 final class HotkeyMonitor {
     private static let escapeKeyCode: UInt16 = 53
-    // Device-dependent modifier bits (NX_DEVICE*KEYMASK).
-    private static let leftControlMask: UInt = 0x0001
-    private static let shiftMasks: UInt = 0x0002 | 0x0004
-    /// A combo held longer than this is someone holding keys, not a tap.
+    /// A modifier combo held longer than this is someone holding keys, not a tap.
     private static let maxTap: TimeInterval = 1.0
+    private static let fallbackID: UInt32 = 1
+    private static let primaryID: UInt32 = 2
 
     var onAction: ((HotkeyStateMachine.Action) -> Void)?
+    private(set) var spec = HotkeySpec.load()
 
     private var machine = HotkeyStateMachine()
     private var monitors: [Any] = []
-    private var comboDown = false
-    private var hotKeyRef: EventHotKeyRef?
+    private var heldKeys: Set<UInt32> = []
+    private var fallbackRef: EventHotKeyRef?
+    private var primaryRef: EventHotKeyRef?
     private var handlerRef: EventHandlerRef?
+    private var specObserver: NSObjectProtocol?
 
-    // Left Control + Shift tap tracking.
+    // Modifier-combo tracking.
     private var chordDown = false
     private var chordStart: TimeInterval = 0
     private var chordSpoiled = false
 
     var isRecording: Bool { machine.isRecording }
+    /// Paused while the panel records a new shortcut.
+    var paused = false
 
     func start() {
         installMonitors()
-        registerCombo()
+        installCarbonHandler()
+        registerHotKeys()
+        specObserver = NotificationCenter.default.addObserver(forName: HotkeySpec.changed, object: nil, queue: .main) { [weak self] _ in
+            self?.reload()
+        }
+    }
+
+    private func reload() {
+        spec = HotkeySpec.load()
+        chordDown = false
+        machine.reset(keyStillDown: false)
+        registerHotKeys()
+        AppLog.write("hotkey changed to \(spec.display) (\(spec.mode.rawValue))")
     }
 
     /// (Re)installs the NSEvent monitors; call again once Accessibility is granted,
@@ -50,22 +64,23 @@ final class HotkeyMonitor {
 
     /// Called when the app ends a recording on its own (time limit, error, busy).
     func resetAfterExternalStop() {
-        machine.reset(keyStillDown: comboDown)
+        machine.reset(keyStillDown: !heldKeys.isEmpty || chordDown)
     }
 
     private func emit(_ action: HotkeyStateMachine.Action?) {
-        if let action { onAction?(action) }
+        if let action, !paused { onAction?(action) }
     }
 
     private func handle(_ event: NSEvent) {
+        guard !paused else { return }
         switch event.type {
         case .flagsChanged:
-            handleModifiers(event)
+            if spec.keyCode == nil { handleModifiers(event) }
         case .keyDown:
-            if chordDown { chordSpoiled = true } // ⌃⇧ + a key is a shortcut, not our tap
+            if chordDown { chordSpoiled = true } // combo + a key is some other shortcut
             if event.keyCode == Self.escapeKeyCode {
-                emit(machine.escape(keyStillDown: comboDown))
-            } else if !comboDown {
+                emit(machine.escape(keyStillDown: !heldKeys.isEmpty || chordDown))
+            } else if heldKeys.isEmpty {
                 emit(machine.otherKeyDown(at: event.timestamp))
             }
         default:
@@ -74,57 +89,86 @@ final class HotkeyMonitor {
     }
 
     private func handleModifiers(_ event: NSEvent) {
-        let raw = event.modifierFlags.rawValue
-        let flags = event.modifierFlags
-        let leftControl = raw & Self.leftControlMask != 0
-        let shift = raw & Self.shiftMasks != 0
-        let others = flags.contains(.option) || flags.contains(.command) || flags.contains(.function)
-        if leftControl && shift {
+        let bits = HotkeySpec.deviceBits(event.modifierFlags)
+        if bits == spec.modifiers {
             if !chordDown {
                 chordDown = true
                 chordStart = event.timestamp
-                chordSpoiled = others
-            } else if others {
-                chordSpoiled = true
+                chordSpoiled = false
+                if spec.mode == .hold { emit(machine.keyDown(at: event.timestamp)) }
             }
             return
         }
         guard chordDown else { return }
-        // The combo was broken by releasing one of its keys: that is the tap.
+        if bits & ~spec.modifiers != 0 {
+            chordSpoiled = true // an extra modifier joined: some other shortcut
+            if spec.mode == .hold { emit(machine.otherKeyDown(at: event.timestamp)) }
+        }
+        if spec.modifiers & ~bits == 0 { return } // all our keys still down
         chordDown = false
-        let quick = event.timestamp - chordStart <= Self.maxTap
-        if !chordSpoiled && quick {
-            emit(machine.toggle())
-        } else {
-            AppLog.write("⌃⇧ ignored (spoiled \(chordSpoiled), quick \(quick))")
+        switch spec.mode {
+        case .hold:
+            emit(machine.keyUp(at: event.timestamp))
+        case .toggle:
+            let quick = event.timestamp - chordStart <= Self.maxTap
+            if !chordSpoiled && quick {
+                emit(machine.toggle())
+            } else {
+                AppLog.write("\(spec.display) ignored (spoiled \(chordSpoiled), quick \(quick))")
+            }
         }
     }
 
-    // MARK: - ⌃⌥Space via Carbon (no permission needed)
+    // MARK: - Carbon hot keys (key combos; no permission needed)
 
-    /// False if another app already owns the combo.
+    /// False if another app already owns ⌃⌥Space.
     private(set) var comboRegistered = false
 
-    private func registerCombo() {
+    private func installCarbonHandler() {
         var spec = [EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed)),
                     EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyReleased))]
         let me = Unmanaged.passUnretained(self).toOpaque()
         InstallEventHandler(GetApplicationEventTarget(), { _, event, user -> OSStatus in
             guard let event, let user else { return noErr }
+            var id = EventHotKeyID()
+            GetEventParameter(event, EventParamName(kEventParamDirectObject), EventParamType(typeEventHotKeyID), nil,
+                              MemoryLayout<EventHotKeyID>.size, nil, &id)
             let monitor = Unmanaged<HotkeyMonitor>.fromOpaque(user).takeUnretainedValue()
-            monitor.handleCombo(pressed: GetEventKind(event) == UInt32(kEventHotKeyPressed))
+            monitor.handleHotKey(id: id.id, pressed: GetEventKind(event) == UInt32(kEventHotKeyPressed))
             return noErr
         }, 2, &spec, me, &handlerRef)
-        let id = EventHotKeyID(signature: OSType(0x445A_4C57), id: 1) // "DZLW"
-        // ⌥Space is often taken (Claude desktop quick entry, launchers); ⌃Space switches input sources.
-        comboRegistered = RegisterEventHotKey(UInt32(kVK_Space), UInt32(optionKey | controlKey), id,
-                                              GetApplicationEventTarget(), 0, &hotKeyRef) == noErr
     }
 
-    private func handleCombo(pressed: Bool) {
+    private func registerHotKeys() {
+        if let r = primaryRef { UnregisterEventHotKey(r); primaryRef = nil }
+        if let r = fallbackRef { UnregisterEventHotKey(r); fallbackRef = nil }
+        heldKeys.removeAll()
+        if let key = spec.keyCode {
+            let id = EventHotKeyID(signature: OSType(0x445A_4C57), id: Self.primaryID)
+            let ok = RegisterEventHotKey(UInt32(key), spec.carbonModifiers, id, GetApplicationEventTarget(), 0, &primaryRef)
+            if ok != noErr { AppLog.write("could not register \(spec.display): taken by another app") }
+        }
+        // ⌥Space is often taken (Claude desktop quick entry, launchers); ⌃Space switches input sources.
+        let fallbackIsPrimary = spec.keyCode == UInt16(kVK_Space) && spec.carbonModifiers == UInt32(optionKey | controlKey)
+        if !fallbackIsPrimary {
+            let id = EventHotKeyID(signature: OSType(0x445A_4C57), id: Self.fallbackID)
+            comboRegistered = RegisterEventHotKey(UInt32(kVK_Space), UInt32(optionKey | controlKey), id,
+                                                  GetApplicationEventTarget(), 0, &fallbackRef) == noErr
+        } else {
+            comboRegistered = true
+        }
+    }
+
+    private func handleHotKey(id: UInt32, pressed: Bool) {
+        guard !paused else { return }
         let now = ProcessInfo.processInfo.systemUptime
-        guard pressed != comboDown else { return }
-        comboDown = pressed
-        emit(pressed ? machine.keyDown(at: now) : machine.keyUp(at: now))
+        let wasDown = heldKeys.contains(id)
+        guard pressed != wasDown else { return } // key repeat
+        if pressed { heldKeys.insert(id) } else { heldKeys.remove(id) }
+        if id == Self.primaryID && spec.mode == .toggle {
+            if pressed { emit(machine.toggle()) }
+        } else {
+            emit(pressed ? machine.keyDown(at: now) : machine.keyUp(at: now))
+        }
     }
 }
