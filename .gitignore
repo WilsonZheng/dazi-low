@@ -1,0 +1,12 @@
+.DS_Store
+build/
+app/.build/
+app/.swiftpm/
+__pycache__/
+*.pyc
+.venv/
+# Personal data never goes into this public repo.
+lexicon*.json
+!engine/lexicon.example.json
+history/
+*.wav
