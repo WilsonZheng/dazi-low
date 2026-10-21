@@ -50,8 +50,21 @@ class SegmenterTest(unittest.TestCase):
 
     def test_silence_detection(self):
         self.assertFalse(has_speech(silence(2)))
-        self.assertFalse(has_speech(np.random.default_rng(0).normal(0, 0.002, 32000).astype(np.float32)))
         self.assertTrue(has_speech(tone(0.5, amp=0.05)))
+        # Quiet microphone: speech peaks around RMS 0.01 over a 0.001 noise floor.
+        rng = np.random.default_rng(0)
+        noise = rng.normal(0, 0.001, 32000).astype(np.float32)
+        quiet = noise + tone(2, amp=0.014)
+        seg = Segmenter()
+        feed(seg, np.concatenate([noise, quiet]))
+        levels = seg.levels()
+        self.assertTrue(has_speech(quiet, levels))
+        self.assertFalse(has_speech(noise, levels))
+        # Noisy room: floor 0.004, speech only 0.01; speech must still count.
+        loud_noise = rng.normal(0, 0.004, 32000).astype(np.float32)
+        seg = Segmenter()
+        feed(seg, np.concatenate([loud_noise, loud_noise + tone(2, amp=0.012)]))
+        self.assertTrue(has_speech(loud_noise + tone(2, amp=0.012), seg.levels()))
 
     def test_forces_cut_without_pause(self):
         cuts = feed(Segmenter(max_segment_s=20), tone(26))
@@ -109,6 +122,21 @@ class LexiconTest(unittest.TestCase):
         lex = Lexicon.load("/nonexistent/lexicon.json")
         self.assertEqual(lex.terms, [])
         self.assertEqual(lex.apply("x"), "x")
+
+
+class LeakTest(unittest.TestCase):
+    def test_strips_context_readback_only(self):
+        from asr import Recognizer
+        r = Recognizer.__new__(Recognizer)
+        hot = ["GitHub", "PIMS", "Vello", "Orca", "admin", "Claude Code"]
+        import re
+        alts = "|".join(re.escape(h) for h in sorted(hot, key=len, reverse=True))
+        r._leak = re.compile(rf"(?:{alts})(?:\s*[,，、]\s*(?:{alts})){{3,}}[,，、]?")
+        r._order = {h: i for i, h in enumerate(hot)}
+        leaked = "往 promotion 上面靠？ GitHub, PIMS, Vello, Orca, admin"
+        self.assertTrue(r._leaked(leaked))
+        spoken = "用 Orca、Vello、GitHub、PIMS 四个"
+        self.assertFalse(r._leaked(spoken))
 
 
 class AcronymTest(unittest.TestCase):

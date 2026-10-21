@@ -29,11 +29,17 @@ class Recognizer:
         self._head_ids = self.tok.encode("<|im_end|>\n<|im_start|>user\n<|audio_start|>", add_special_tokens=False)
         self._suffix_ids = self.tok.encode(_SUFFIX, add_special_tokens=False)
         self.context = ""
+        self._leak = None
+        self._order: dict[str, int] = {}
         self._prefix_cache = None
         self.set_hotwords([])
 
     def set_hotwords(self, hotwords: list[str]) -> None:
         self.context = ", ".join(hotwords)
+        # On (near) silence the model sometimes reads its context back: "GitHub, PIMS, Vello, …".
+        alts = "|".join(re.escape(h) for h in sorted(hotwords, key=len, reverse=True))
+        self._leak = re.compile(rf"(?:{alts})(?:\s*[,，、]\s*(?:{alts})){{3,}}[,，、]?") if hotwords else None
+        self._order = {h: i for i, h in enumerate(hotwords)}
         # Cached part ends right after the hotwords so per-request context can follow.
         prefix = f"<|im_start|>system\n{self.context}\n" if self.context else "<|im_start|>system\n"
         ids = mx.array(self.tok.encode(prefix, add_special_tokens=False))[None]
@@ -81,12 +87,29 @@ class Recognizer:
             if tid in self.eos:
                 break
             out.append(tid)
-            if len(out) % 8 == 0 and _looping(out):
-                out = _trim_loop(out)
-                break
+            if len(out) % 8 == 0:
+                if _looping(out):
+                    out = _trim_loop(out)
+                    break
+                if self._leaked(self.tok.decode(out[-48:])):
+                    break
             y = nxt
-        text = self.tok.decode(out)
-        return _LANG_TAG.sub("", text).strip(), time.perf_counter() - t
+        text = _LANG_TAG.sub("", self.tok.decode(out))
+        if self._leak:
+            text = self._leak.sub(lambda m: "" if self._is_context_run(m.group()) else m.group(), text)
+        return text.strip(), time.perf_counter() - t
+
+    def _is_context_run(self, run: str) -> bool:
+        """A leaked context run repeats the hotword list in its own order; a real spoken
+        list ("GitHub、Vello 和 Orca") does not."""
+        items = [x.strip() for x in re.split(r"[,，、]", run) if x.strip()]
+        idx = [self._order.get(x) for x in items]
+        if None in idx:
+            return False
+        return sum(1 for a, b in zip(idx, idx[1:]) if b == a + 1) >= 3
+
+    def _leaked(self, text: str) -> bool:
+        return bool(self._leak) and any(self._is_context_run(m.group()) for m in self._leak.finditer(text))
 
 
 def _looping(out: list[int], min_k: int = 4, max_k: int = 40) -> bool:

@@ -70,8 +70,6 @@ class Pipeline:
         Chinese but this segment came back with no Chinese at all, it was probably
         translated (segments that start with an English word do that), so redo it in
         Chinese mode, which keeps English words in English."""
-        if not has_speech(audio):
-            return "", 0.0
         text, secs = self.asr.transcribe(audio)
         if session.lang == "Chinese" and text and not _CJK.search(text):
             text, more = self.asr.transcribe(audio, language="Chinese")
@@ -114,7 +112,7 @@ class Pipeline:
             start = s_end
         tail_audio = audio[start:]
         tail, tail_time = ("", 0.0)
-        if has_speech(tail_audio) or not session.segments:
+        if not session.segments or has_speech(tail_audio, session.segmenter.levels()):
             tail, tail_time = self.asr.transcribe(tail_audio, language=session.lang)
         parts.append(tail)
         raw = join_texts(parts)

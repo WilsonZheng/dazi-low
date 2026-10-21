@@ -31,15 +31,22 @@ class Segmenter:
         self._tail = buf[n * FRAME:]
         return self._find_cut()
 
+    def levels(self) -> tuple[float, float] | None:
+        """(noise floor, speech level): 10th and 90th percentile frame energy so far."""
+        if len(self.energies) < 20:
+            return None
+        noise, speech = np.percentile(self.energies, [10, 90])
+        return float(noise), float(speech)
+
     def _threshold(self) -> float:
         """Silence = clearly above the noise floor but well below speech level.
         Using speech level too keeps a recording with few pauses from treating
         everything as silence."""
         e = np.array(self.energies)
         if len(e) < 20:
-            return 0.006
+            return 0.002
         noise, speech = np.percentile(e, [10, 90])
-        return float(max(0.004, min(noise * 3.0, speech * 0.3)))
+        return float(max(0.0008, min(noise * 3.0, speech * 0.3)))
 
     def _find_cut(self) -> int | None:
         end = len(self.energies) * FRAME
@@ -86,14 +93,22 @@ class Segmenter:
 _CJK = re.compile(r"[\u3400-\u9fff]")
 
 
-def has_speech(audio: np.ndarray, min_s: float = 0.15) -> bool:
-    """False for (near) silence, which the recognizer would otherwise fill with words."""
+def has_speech(audio: np.ndarray, levels: tuple[float, float] | None = None, min_s: float = 0.3) -> bool:
+    """False only for clear silence (used for the bit after the last cut, where the
+    recognizer would otherwise invent words). The threshold sits between the
+    recording's noise floor and its speech level: microphone gain varies a lot
+    (some recordings peak at RMS 0.01), so a fixed level would drop real speech."""
     n = len(audio) // FRAME
     if n == 0:
         return False
     frames = audio[: n * FRAME].reshape(n, FRAME)
     rms = np.sqrt((frames ** 2).mean(axis=1) + 1e-12)
-    return int((rms > 0.006).sum()) * FRAME >= min_s * SR
+    if levels is None:
+        thr = 0.002
+    else:
+        noise, speech = levels
+        thr = max(0.0008, min(noise * 3.0, speech * 0.35))
+    return int((rms > thr).sum()) * FRAME >= min_s * SR
 
 
 def session_language(first_text: str) -> str | None:
