@@ -10,7 +10,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from lexicon import Lexicon  # noqa: E402
 from guard import accept_polished, check, coverage, novelty  # noqa: E402
-from pipeline import collapse_acronyms  # noqa: E402
+from pipeline import clean_fillers, collapse_acronyms  # noqa: E402
 from segmenter import SR, Segmenter, has_speech, join_texts, session_language  # noqa: E402
 
 
@@ -137,6 +137,12 @@ class LeakTest(unittest.TestCase):
         self.assertTrue(r._leaked(leaked))
         spoken = "用 Orca、Vello、GitHub、PIMS 四个"
         self.assertFalse(r._leaked(spoken))
+
+
+class FillerTest(unittest.TestCase):
+    def test_clean(self):
+        self.assertEqual(clean_fillers("我我在想，呃，然后然后这这这个看看"), "我在想，然后这个看看")
+        self.assertEqual(clean_fillers("试试看，刚刚好"), "试试看，刚刚好")
 
 
 class AcronymTest(unittest.TestCase):

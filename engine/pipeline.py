@@ -23,6 +23,19 @@ _DOTTED = re.compile(r"\b((?:[A-Z]\.){2,})")
 _SPACED = re.compile(r"(?<![A-Za-z])([A-Z](?: [A-Z]){1,5})(?![A-Za-z])")
 
 
+_FILLER = re.compile(r"[呃嗯额]+[，,、]?\s*")
+# Stutters on function words only; real reduplication (看看, 试试, 刚刚) is left alone.
+_STUTTER = re.compile(r"([我你他她它这那的了去给就是在把有要])\1+")
+_REPEAT = re.compile(r"(然后|反正|就是|那个|这个|所以|但是)(?:[，,]?\s*\1)+")
+
+
+def clean_fillers(text: str) -> str:
+    """Deterministic cleanup for text that skipped the post-editor."""
+    text = _FILLER.sub("", text)
+    text = _REPEAT.sub(r"\1", text)
+    return _STUTTER.sub(r"\1", text)
+
+
 def collapse_acronyms(text: str) -> str:
     """Chinese mode spells acronyms out ("P.R.", "C I C D"); join them back."""
     text = _DOTTED.sub(lambda m: m.group(1).replace(".", ""), text)
@@ -134,7 +147,8 @@ class Pipeline:
                 why = check(fixed, r.text, self.allowed) if r.complete else "incomplete"
                 if why:
                     timings["minimal_rejected"] = why
-            if not why:
-                text = self.lexicon.apply(r.text)
+            text = self.lexicon.apply(r.text) if not why else clean_fillers(fixed)
+            if not why and timings.get("polish_rejected"):
+                text = clean_fillers(text)  # the minimal edit sometimes keeps fillers
         timings["total_engine"] = round(time.perf_counter() - t0, 3)
         return {"text": text, "raw": raw, "timings": timings}
