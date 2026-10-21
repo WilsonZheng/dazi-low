@@ -12,7 +12,7 @@ FRAME = 480  # 30 ms
 
 
 class Segmenter:
-    def __init__(self, min_segment_s: float = 12.0, max_segment_s: float = 28.0,
+    def __init__(self, min_segment_s: float = 16.0, max_segment_s: float = 28.0,
                  min_pause_s: float = 0.45):
         self.min_seg = int(min_segment_s * SR)
         self.max_seg = int(max_segment_s * SR)

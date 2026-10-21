@@ -34,19 +34,19 @@ def feed(seg: Segmenter, audio: np.ndarray) -> list[int]:
 
 class SegmenterTest(unittest.TestCase):
     def test_cuts_in_pause_after_min_length(self):
-        audio = np.concatenate([tone(14), silence(0.6), tone(5)])
+        audio = np.concatenate([tone(18), silence(0.6), tone(5)])
         cuts = feed(Segmenter(), audio)
         self.assertEqual(len(cuts), 1)
-        self.assertTrue(14 * SR < cuts[0] < 14.6 * SR, cuts[0] / SR)
+        self.assertTrue(18 * SR < cuts[0] < 18.6 * SR, cuts[0] / SR)
 
     def test_ignores_pause_before_min_length(self):
         audio = np.concatenate([tone(3), silence(0.6), tone(4)])
         self.assertEqual(feed(Segmenter(), audio), [])
 
     def test_cuts_eagerly_inside_trailing_pause(self):
-        cuts = feed(Segmenter(), np.concatenate([tone(13), silence(1.0)]))
+        cuts = feed(Segmenter(), np.concatenate([tone(17), silence(1.0)]))
         self.assertEqual(len(cuts), 1)
-        self.assertTrue(13 * SR < cuts[0] < 13.5 * SR, cuts[0] / SR)
+        self.assertTrue(17 * SR < cuts[0] < 17.5 * SR, cuts[0] / SR)
 
     def test_silence_detection(self):
         self.assertFalse(has_speech(silence(2)))

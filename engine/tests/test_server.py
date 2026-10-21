@@ -72,8 +72,8 @@ class ServerProtocolTest(unittest.TestCase):
             while not ready["ready"]:
                 ready = await self._read(reader, "status")
 
-            # 14 s of speech, a pause, 3 s more: one background segment + tail.
-            t = np.arange(14 * 16000) / 16000
+            # 18 s of speech, a pause, 3 s more: one background segment + tail.
+            t = np.arange(18 * 16000) / 16000
             speech = (0.2 * np.sin(2 * np.pi * 220 * t)).astype(np.float32)
             audio = np.concatenate([speech, np.zeros(16000, np.float32), speech[: 3 * 16000]])
             self.send(writer, {"type": "begin", "id": "a", "app": "x", "app_name": "X"})
