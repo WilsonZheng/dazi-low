@@ -61,6 +61,7 @@ final class AppController: NSObject, NSApplicationDelegate {
         scheduleConnect()
 
         recorder.onChunk = { [weak self] samples in self?.sendAudio(samples) }
+        recorder.prewarm()
         hotkey.onAction = { [weak self] action in self?.handleHotkey(action) }
         hotkey.start()
         if !hotkey.comboRegistered { NSLog("DaziLow: ⌃⌥Space is taken by another app") }

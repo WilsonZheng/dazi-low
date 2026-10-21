@@ -32,6 +32,9 @@ class FakePipeline:
     def lexicon_changed(self, path):
         return False
 
+    def touch(self):
+        pass
+
     def finalize(self, session):
         parts = [f.result()[0] for _, _, f in session.segments]
         return {"text": " ".join(parts + [f"tail({session.n})"]), "raw": ",".join(session.edited), "timings": {}}

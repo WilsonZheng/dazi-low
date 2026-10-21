@@ -7,6 +7,7 @@ import os
 import re
 import time
 
+import mlx.core as mx
 import numpy as np
 
 from asr import Recognizer
@@ -140,6 +141,17 @@ class Pipeline:
         self.asr.warmup()
         if self.polisher:
             self.polisher.polish(user_message("测试"), source="测试")
+
+    def touch(self) -> None:
+        """Pages both models back in after idle time. Under memory pressure macOS evicts
+        them, and the first dictation after an hour paid ~3 s for it; doing this when the
+        key goes down hides that behind the user's speech."""
+        t = time.perf_counter()
+        self.asr.transcribe(np.zeros(8_000, dtype=np.float32))
+        if self.polisher:
+            probe = mx.array(self.polisher.tok.encode("你好", add_special_tokens=False))[None]
+            mx.eval(self.polisher.model(probe, cache=self.polisher._fresh_cache()))
+        log.info("models touched in %.2fs", time.perf_counter() - t)
 
     # ---------- while recording ----------
 

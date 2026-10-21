@@ -79,6 +79,7 @@ class Server:
         self.writers: set[asyncio.StreamWriter] = set()
         self.sessions: dict[str, Session] = {}
         self.loop: asyncio.AbstractEventLoop | None = None
+        self.last_gpu = time.time()
 
     # ---------- GPU queue ----------
 
@@ -90,6 +91,7 @@ class Server:
             try:
                 return fn(*args)
             finally:
+                self.last_gpu = time.time()
                 with self.pending_lock:
                     self.pending -= 1
         fut = self.gpu.submit(run)
@@ -193,6 +195,8 @@ class Server:
             self._send(writer, {"type": "status", "ready": self.ready, "text": self.status_text})
         elif kind == "begin" and sid:
             self.sessions[sid] = Session(sid, msg.get("app", ""), msg.get("app_name", ""), self.cfg["segment"], writer)
+            if self.pipeline and self.ready and time.time() - self.last_gpu > 30:
+                self.submit(self._touch)
         elif kind == "audio" and sid in self.sessions:
             s = self.sessions[sid]
             pcm = np.frombuffer(base64.b64decode(msg["pcm16"]), dtype="<i2").astype(np.float32) / 32768.0
@@ -211,6 +215,12 @@ class Server:
             s = self.sessions.pop(sid)
             s.ended = True
             asyncio.ensure_future(self.finish(s))
+
+    def _touch(self) -> None:
+        try:
+            self.pipeline.touch()
+        except Exception:
+            log.exception("warm-up failed (ignored)")
 
     def _cancel(self, s: Session) -> None:
         s.cancelled = True

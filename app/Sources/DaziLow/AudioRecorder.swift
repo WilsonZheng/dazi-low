@@ -25,6 +25,22 @@ final class AudioRecorder {
     private let fakeMic = ProcessInfo.processInfo.environment["DAZI_FAKE_MIC"]
     private var fakeTimer: DispatchSourceTimer?
 
+    /// The first audio engine in a process takes ~3 s to come up (Core Audio client
+    /// setup), which swallowed the start of the first dictation after launch. Doing the
+    /// setup at launch, without starting capture, leaves the mic indicator off.
+    func prewarm() {
+        let t = Date()
+        let e = AVAudioEngine()
+        if let mic = Self.builtInMicrophone(), let unit = e.inputNode.audioUnit {
+            var id = mic
+            AudioUnitSetProperty(unit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0,
+                                 &id, UInt32(MemoryLayout<AudioDeviceID>.size))
+        }
+        _ = e.inputNode.outputFormat(forBus: 0)
+        e.prepare()
+        AppLog.write(String(format: "audio prewarmed in %.2f s", Date().timeIntervalSince(t)))
+    }
+
     func start() throws {
         guard !isRunning else { return }
         restarts = 0
@@ -46,14 +62,20 @@ final class AudioRecorder {
         }
         // A fresh engine every time: a reused one can hold a stale input format after a
         // device change, and installTap then raises an Objective-C exception.
+        let t0 = Date()
         engine = AVAudioEngine()
-        if let mic = Self.builtInMicrophone(), let unit = engine.inputNode.audioUnit {
+        let mic = Self.builtInMicrophone()
+        let t1 = Date()
+        if let mic, let unit = engine.inputNode.audioUnit {
             var id = mic
             AudioUnitSetProperty(unit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0,
                                  &id, UInt32(MemoryLayout<AudioDeviceID>.size))
         }
+        let t2 = Date()
         try tapAndStart()
-        AppLog.write("mic started: \(engine.inputNode.outputFormat(forBus: 0))")
+        AppLog.write(String(format: "mic started in %.2f s (find device %.2f, select %.2f, start %.2f): %@",
+                            Date().timeIntervalSince(t0), t1.timeIntervalSince(t0), t2.timeIntervalSince(t1),
+                            Date().timeIntervalSince(t2), "\(engine.inputNode.outputFormat(forBus: 0))"))
         isRunning = true
         configObserver = NotificationCenter.default.addObserver(
             forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main
