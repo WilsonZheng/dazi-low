@@ -58,7 +58,9 @@ class Recognizer:
     def warmup(self) -> None:
         self.transcribe(np.zeros(16_000, dtype=np.float32))
 
-    def transcribe(self, audio: np.ndarray, language: str | None = None) -> tuple[str, float]:
+    beams = 1  # >1 switches decoding to beam search
+
+    def transcribe(self, audio: np.ndarray, language: str | None = None, beams: int | None = None) -> tuple[str, float]:
         """`language` (e.g. "Chinese") skips auto-detection. Chinese mode keeps English
         words in English, so it is the right lock for mixed speech: without it, a
         segment that starts with an English word can come back translated to English."""
@@ -72,6 +74,29 @@ class Recognizer:
                                          if language else [])
         text_emb = self.model.model.embed_tokens(mx.array(suffix_ids))
         embeds = mx.concatenate([head_emb, audio_emb.astype(text_emb.dtype), text_emb], axis=0)
+        beams = self.beams if beams is None else beams
+        if beams > 1:
+            out = self._beam_search(embeds, n_audio, beams)
+        else:
+            out = self._greedy(embeds, n_audio)
+        text = _LANG_TAG.sub("", self.tok.decode(out))
+        if self._leak:
+            text = self._leak.sub(lambda m: "" if self._is_context_run(m.group()) else m.group(), text)
+        return text.strip(), time.perf_counter() - t
+
+    def _is_context_run(self, run: str) -> bool:
+        """A leaked context run repeats the hotword list in its own order; a real spoken
+        list ("GitHub、Vello 和 Orca") does not."""
+        items = [x.strip() for x in re.split(r"[,，、]", run) if x.strip()]
+        idx = [self._order.get(x) for x in items]
+        if None in idx:
+            return False
+        return sum(1 for a, b in zip(idx, idx[1:]) if b == a + 1) >= 3
+
+    def _leaked(self, text: str) -> bool:
+        return bool(self._leak) and any(self._is_context_run(m.group()) for m in self._leak.finditer(text))
+
+    def _greedy(self, embeds, n_audio: int) -> list[int]:
         m = self.model
         cache = self._fresh_cache()
         hidden = m.model(inputs_embeds=embeds[None], cache=cache)[:, -1:, :]
@@ -94,22 +119,63 @@ class Recognizer:
                 if self._leaked(self.tok.decode(out[-48:])):
                     break
             y = nxt
-        text = _LANG_TAG.sub("", self.tok.decode(out))
-        if self._leak:
-            text = self._leak.sub(lambda m: "" if self._is_context_run(m.group()) else m.group(), text)
-        return text.strip(), time.perf_counter() - t
+        return out
 
-    def _is_context_run(self, run: str) -> bool:
-        """A leaked context run repeats the hotword list in its own order; a real spoken
-        list ("GitHub、Vello 和 Orca") does not."""
-        items = [x.strip() for x in re.split(r"[,，、]", run) if x.strip()]
-        idx = [self._order.get(x) for x in items]
-        if None in idx:
-            return False
-        return sum(1 for a, b in zip(idx, idx[1:]) if b == a + 1) >= 3
-
-    def _leaked(self, text: str) -> bool:
-        return bool(self._leak) and any(self._is_context_run(m.group()) for m in self._leak.finditer(text))
+    def _beam_search(self, embeds, n_audio: int, beams: int) -> list[int]:
+        """Keeps `beams` hypotheses; picks the best by log-probability with a mild
+        length normalisation. The prompt is prefilled once, then the cache is repeated
+        across beams and reordered every step."""
+        m = self.model
+        cache = self._fresh_cache()
+        hidden = m.model(inputs_embeds=embeds[None], cache=cache)[:, -1:, :]
+        logits = (m.lm_head(hidden) if m.lm_head is not None else m.model.embed_tokens.as_linear(hidden))[:, -1, :]
+        logp = logits.astype(mx.float32) - mx.logsumexp(logits.astype(mx.float32), axis=-1, keepdims=True)
+        first = mx.argsort(-logp[0])[:beams].tolist()
+        seqs = [[t] for t in first]
+        scores = [float(logp[0, t].item()) for t in first]
+        for c in cache:
+            c.keys = mx.repeat(c.keys[..., : c.offset, :], len(seqs), axis=0)
+            c.values = mx.repeat(c.values[..., : c.offset, :], len(seqs), axis=0)
+        finished: list[tuple[float, list[int]]] = []
+        norm = lambda sc, n: sc / (((5 + n) / 6) ** 0.6)
+        for _ in range(64 + n_audio * 2):
+            alive = [i for i, s in enumerate(seqs) if s[-1] not in self.eos]
+            for i in range(len(seqs)):
+                if seqs[i][-1] in self.eos:
+                    finished.append((norm(scores[i], len(seqs[i]) - 1), seqs[i][:-1]))
+            if not alive:
+                break
+            if finished and len(finished) >= beams:
+                best_alive = max(norm(scores[i], len(seqs[i])) for i in alive)
+                if max(f[0] for f in finished) >= best_alive:
+                    break
+            seqs = [seqs[i] for i in alive]
+            scores = [scores[i] for i in alive]
+            idx = mx.array(alive)
+            for c in cache:
+                c.keys, c.values = c.keys[idx], c.values[idx]
+            last = mx.array([[s[-1]] for s in seqs])
+            logits = m._forward_with_embeds(m.model.embed_tokens(last), cache)[:, -1, :].astype(mx.float32)
+            logp = logits - mx.logsumexp(logits, axis=-1, keepdims=True)
+            k = beams * 2
+            top = mx.argpartition(-logp, kth=k - 1, axis=-1)[:, :k]
+            vals = mx.take_along_axis(logp, top, axis=-1)
+            mx.eval(top, vals)
+            top_l, vals_l = top.tolist(), vals.tolist()
+            cand = sorted(((scores[b] + vals_l[b][j], b, top_l[b][j]) for b in range(len(seqs)) for j in range(k)),
+                          reverse=True)[:beams]
+            parents = [b for _, b, _ in cand]
+            seqs = [seqs[b] + [t] for _, b, t in cand]
+            scores = [sc for sc, _, _ in cand]
+            pidx = mx.array(parents)
+            for c in cache:
+                c.keys, c.values = c.keys[pidx], c.values[pidx]
+            if len(seqs[0]) % 8 == 0 and _looping(seqs[0]):
+                break
+        for i, s in enumerate(seqs):
+            if s and s[-1] not in self.eos:
+                finished.append((norm(scores[i], len(s)), s))
+        return max(finished, key=lambda f: f[0])[1] if finished else []
 
 
 def _looping(out: list[int], min_k: int = 4, max_k: int = 40) -> bool:

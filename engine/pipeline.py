@@ -197,9 +197,12 @@ class Pipeline:
         Chinese but this segment came back with no Chinese at all, it was probably
         translated (segments that start with an English word do that), so redo it in
         Chinese mode, which keeps English words in English."""
-        text, secs = self.asr.transcribe(audio)
+        # Beam search here costs nothing the user waits for: segments are recognized while
+        # they are still talking. The tail after release stays greedy.
+        beams = self.cfg.get("background_beams", 1)
+        text, secs = self.asr.transcribe(audio, beams=beams)
         if session.lang == "Chinese" and text and not _CJK.search(text):
-            text, more = self.asr.transcribe(audio, language="Chinese")
+            text, more = self.asr.transcribe(audio, language="Chinese", beams=beams)
             secs += more
         if session.lang is None and text.strip():
             session.lang = session_language(text)

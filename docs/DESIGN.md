@@ -131,6 +131,11 @@ Final tuning on the eval set (99 clips): six personal Typeless examples instead 
 moved MER vs Typeless 32.2 → 31.9 and term recall 81.5 → 82.5; 300 recognizer hotwords
 instead of 220 lowered term recall (79.4) and was slower, so 220 stays.
 
+Beam search (4 beams) for the recognizer: on whole files it raised term recall
+76.2 → 78.3 but ran 2.5× slower, so it is used only for background segments, which
+are recognized while the user is still talking (background work stays at ~11% of real
+time, max 20%). End to end: MER 31.9 → 31.7, term recall 82.5 → 83.1, waiting unchanged.
+
 Tried and not adopted: giving the post-editor a second recognizer hypothesis (no
 hotwords) as `<alt>`. Over all clips it cut English WER 31.7 → 29.6 and raised term
 recall 81.5 → 83.1 with MER unchanged, but chunks of two hypotheses cannot be aligned
