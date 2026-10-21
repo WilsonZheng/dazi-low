@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import difflib
 import logging
 import os
 import re
@@ -95,10 +96,27 @@ def join_chunks(chunks: list[str], continues: list[bool] | None = None) -> str:
     return "\n".join(l for l in out if l is not None)
 
 
-def context_terms(context: str) -> set[str]:
-    """Latin tokens from the text around the cursor (names, repos, tools), in the
-    guard's own tokenization; Chinese characters are not exempted."""
-    return {t for t in tokens(context or "") if t.isascii()}
+_TAG = re.compile(r"</?\s*(context|transcript|alt)\s*>", re.I)
+
+
+def sanitize_context(context: str) -> str:
+    """Context comes from other apps (possibly someone else's message): strip anything
+    that could fake the prompt's own tags."""
+    return _TAG.sub(" ", context or "")
+
+
+def context_terms(context: str, transcript: str, limit: int = 20) -> set[str]:
+    """Context words the guard may accept as spelling fixes: only Latin tokens that look
+    like a misheard version of something actually said (similar spelling), so text near
+    the cursor can correct a name but never inject content."""
+    said = {t for t in tokens(transcript) if t.isascii() and not t.isdigit()}
+    out: set[str] = set()
+    for t in {t for t in tokens(context) if t.isascii() and len(t) >= 3 and not t.isdigit()}:
+        if t in said or any(difflib.SequenceMatcher(None, t, s).ratio() >= 0.6 for s in said if len(s) >= 2):
+            out.add(t)
+            if len(out) >= limit:
+                break
+    return out
 
 
 def clean_fillers(text: str) -> str:
@@ -197,7 +215,8 @@ class Pipeline:
         t = timings if timings is not None else {}
         # Words around the cursor may name the people and terms being talked about;
         # they are allowed in the output without counting as invented content.
-        allowed = self.allowed | context_terms(context)
+        context = sanitize_context(context)
+        allowed = self.allowed | context_terms(context, fixed)
         if self.lexicon.learned_hints:
             learned = "；".join(f"{a}→{b}" for a, b in self.lexicon.learned_hints)
             context = f"{context}\n用户以前手动纠正过（上下文说得通时照此改）：{learned}".strip()
