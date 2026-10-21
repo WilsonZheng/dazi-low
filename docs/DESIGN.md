@@ -168,7 +168,7 @@ Everything stays on the machine. Personal data — the vocabulary (colleague nam
 internal service names), example pairs, history and audio — lives in
 `~/Library/Application Support/DaziLow/`, never in this public repository.
 
-## Hotkey
+## Hotkey (originally Right Option; changed at the user's request)
 
 Right Option (⌥), chosen because it is free on this machine (Typeless uses
 Left Ctrl+`, VoiceInk Ctrl+Tab) and is a single key.
