@@ -93,17 +93,45 @@ with ~17–27 GB of swap in use, so the engine budget is ~8 GB.
 
 ## Latency levers
 
-1. **Incremental recognition** — the Segmenter cuts at ≥0.45 s pauses once a segment is
-   ≥8 s long; those segments are recognized in the background while recording, so
-   after release only the last few seconds remain (tail p50 0.5 s vs 2.3 s whole-file).
-2. **Cached prefixes** — the hotword prompt (ASR) and the rules/vocabulary/examples
+1. **Incremental recognition** — the Segmenter cuts at the first ≥0.45 s pause once a
+   segment is ≥16 s long (eagerly, without waiting for speech to resume); those
+   segments are recognized in the background while the user is still talking. On the
+   eval set this costs 0.5 MER points against whole-file recognition and cuts the
+   recognition left after release from p50 1.3 s / p90 4.0 s to 0.35 s / 0.70 s.
+2. **Chunked editing while recording** — every recognized segment, minus its last and
+   possibly unfinished sentence, is post-edited in the background; after release only
+   the remainder is edited. Run-on speech with no sentence ends is split at the last
+   comma past 80 characters and glued back with a comma. Numbered lists split by a
+   chunk boundary keep counting. This lowered MER vs Typeless (34.1 → 32.7) and made
+   waiting independent of dictation length.
+3. **Cached prefixes** — the hotword prompt (ASR) and the rules/vocabulary/examples
    prompt (LLM) are prefilled once; requests only pay for their own tokens. The ASR
-   wrapper also replaces mlx-audio's per-position Python loop with one concatenate
-   (identical output, ~0.6 s faster per call).
-3. **Prompt-lookup decoding** — the post-edit mostly copies the transcript, so drafts
-   are taken from the transcript and verified in one pass; greedy, so output is
-   identical to plain decoding.
-4. **Warm models** — the engine loads at app start and warms both models.
+   wrapper also replaces mlx-audio's per-position Python loop with one concatenate.
+4. **Prompt-lookup decoding** (draft length 4), greedy, so the output matches plain
+   decoding. Measured ~1.7× on short contexts; MLX's quantized matmul cost grows almost
+   linearly with the verified width (41 ms for 2 tokens, +18 ms per extra token on the
+   M2 Pro), which caps the gain.
+5. **Wired weights** — `mx.set_wired_limit(9.5 GB)`; without it, swap pressure on this
+   machine paged the model out between requests (prefill p50 2.6 s instead of 0.5 s).
+
+Measured after key release, full pipeline, 102 of the user's recordings:
+
+| Dictation length | p50 | p90 |
+|---|---|---|
+| under 16 s | 0.92 s | 1.72 s |
+| 16–40 s | 1.20 s | 2.41 s |
+| 40–90 s | 1.55 s | 3.14 s |
+| over 90 s | 1.34 s | 2.45 s |
+
+## Quality, blind-judged
+
+A separate judge compared outputs pairwise without knowing which system wrote which.
+
+- Against Typeless on the user's Typeless recordings (40 clips): Typeless 21, Dazi 5,
+  tie 14. Typeless still wins mostly on recognition errors the 8B editor cannot repair
+  and on residual false starts.
+- Against VoiceInk on held-out VoiceInk recordings (40 clips, never used for tuning):
+  Dazi 28, VoiceInk 6, tie 6 — including 11–4–5 against VoiceInk's 27B-LLM enhancement.
 
 ## Faithfulness guard
 
@@ -131,8 +159,9 @@ Left Ctrl+`, VoiceInk Ctrl+Tab) and is a single key.
 
 ## Open risks
 
-- Prompt-lookup gains on hybrid (DeltaNet) models are limited because rejected drafts
-  must be replayed; measured separately on an idle GPU.
+- Long run-on dictations edited in chunks come out as one paragraph instead of a list.
+- Accessibility may need an administrator on this managed Mac; without it the app runs
+  in copy-to-clipboard mode on ⌃⌥Space.
 - TCC permissions are tied to the code signature. The app is ad-hoc signed with the
   default code-hash requirement, so a reinstall needs the two permissions re-enabled
   (an identifier-only requirement would let any app reusing the identifier inherit them).

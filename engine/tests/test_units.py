@@ -141,9 +141,16 @@ class LeakTest(unittest.TestCase):
 
 class ChunkTest(unittest.TestCase):
     def test_split_keeps_unfinished_sentence(self):
-        self.assertEqual(split_complete("你先修一下 CI。然后你就"), ("你先修一下 CI。", "然后你就"))
-        self.assertEqual(split_complete("你先修一下 CI。然后走流程。"), ("你先修一下 CI。", "然后走流程。"))
-        self.assertEqual(split_complete("没有标点的一句话"), ("", "没有标点的一句话"))
+        self.assertEqual(split_complete("你先修一下 CI。然后你就"), ("你先修一下 CI。", "然后你就", False))
+        self.assertEqual(split_complete("你先修一下 CI。然后走流程。"), ("你先修一下 CI。", "然后走流程。", False))
+        self.assertEqual(split_complete("没有标点的一句话"), ("", "没有标点的一句话", False))
+        run_on = "你看看这个里面讨论的东西，然后看看哪些是真正 pick up 的，如果有相关的 PR 的话你就去 review 一下，然后跟进，没问题就 merge，有问题就留 comment，然后"
+        done, rest, cont = split_complete(run_on, clause_after=40)
+        self.assertTrue(cont and done.endswith("，") and rest == "然后")
+
+    def test_join_glues_mid_sentence_chunks(self):
+        self.assertEqual(join_chunks(["你先去 review 一下。", "没问题就 merge。"], [True, False]),
+                         "你先去 review 一下，没问题就 merge。")
 
     def test_join_continues_split_lists(self):
         a = "你要做的事：\n\n1. 先 rebase\n2. 跑 migration"

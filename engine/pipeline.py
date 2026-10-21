@@ -30,27 +30,48 @@ _REPEAT = re.compile(r"(然后|反正|就是|那个|这个|所以|但是)(?:[，
 
 
 _SENTENCE_END = re.compile(r"[。！？!?]|\.(?=\s)")
+_CLAUSE_END = re.compile(r"[，,；;]")
 _LIST_ITEM = re.compile(r"^(\d+)\.\s")
 
 
-def split_complete(text: str) -> tuple[str, str]:
+def split_complete(text: str, clause_after: int = 80) -> tuple[str, str, bool]:
     """Splits off the last sentence, which may continue in the next segment (cuts fall on
-    pauses, and the recognizer closes every segment with a period even mid-sentence)."""
+    pauses, and the recognizer closes every segment with a period even mid-sentence).
+
+    Long run-on speech ("…，然后…，然后…") may have no sentence end at all; past
+    `clause_after` characters it is split at the last comma instead, and the third value
+    says the next chunk continues the same sentence."""
     body = text.rstrip()
     if body and body[-1] in "。！？!?.":
         body = body[:-1]
     ends = [m.end() for m in _SENTENCE_END.finditer(body)]
-    if not ends:
-        return "", text.strip()
-    return text[: ends[-1]].strip(), text[ends[-1]:].strip()
+    if ends:
+        return text[: ends[-1]].strip(), text[ends[-1]:].strip(), False
+    clauses = [m.end() for m in _CLAUSE_END.finditer(body)]
+    if len(body) >= clause_after and clauses and clauses[-1] >= 15:
+        return text[: clauses[-1]].strip(), text[clauses[-1]:].strip(), True
+    return "", text.strip(), False
 
 
-def join_chunks(chunks: list[str]) -> str:
+def join_chunks(chunks: list[str], continues: list[bool] | None = None) -> str:
     """Joins separately edited chunks as paragraphs; a numbered list that a chunk boundary
-    split in two keeps counting (1. 2. | 1. -> 1. 2. 3.)."""
+    split in two keeps counting (1. 2. | 1. -> 1. 2. 3.). A chunk cut mid-sentence
+    (continues[i]) is joined to the next one with a comma instead of a paragraph break."""
+    continues = continues or [False] * len(chunks)
+    merged: list[str] = []
+    glue = False
+    for chunk, cont in zip(chunks, continues + [False] * (len(chunks) - len(continues))):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        if glue and merged:
+            merged[-1] = merged[-1].rstrip("。.") + ("，" if not merged[-1].endswith(("，", ",")) else "") + chunk
+        else:
+            merged.append(chunk)
+        glue = cont
     out: list[str] = []
     last_num = 0
-    for chunk in [c.strip() for c in chunks if c.strip()]:
+    for chunk in merged:
         lines = chunk.split("\n")
         first = _LIST_ITEM.match(lines[0])
         continuing = last_num > 0 and first is not None and first.group(1) == "1"
@@ -171,9 +192,10 @@ class Pipeline:
                 return  # finalize re-recognizes failed segments
             session.chunked += 1
             pending = join_texts([session.pending, text]) if session.pending else text
-            complete, session.pending = split_complete(pending)
+            complete, session.pending, cont = split_complete(pending)
             if len(complete) >= 15:
                 session.edited.append(self.edit(complete, session.app_name, session.chunk_timings))
+                session.continues.append(cont)
             else:
                 session.pending = pending
 
@@ -203,7 +225,7 @@ class Pipeline:
             self.advance_chunks(session)  # anything the background did not get to
             rest = join_texts([session.pending, tail]) if session.pending else tail
             last = self.edit(rest, session.app_name, timings) if rest.strip() else ""
-            text = join_chunks(session.edited + [last])
+            text = join_chunks(session.edited + [last], session.continues + [False])
             timings["chunks"] = len(session.edited) + 1
             for k, v in session.chunk_timings.items():
                 timings["bg_" + k] = v

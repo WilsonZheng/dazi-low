@@ -53,6 +53,7 @@ class Session:
         # Chunked editing while recording: edited text so far, the unfinished last
         # sentence carried over, and how many segments have been consumed.
         self.edited: list[str] = []
+        self.continues: list[bool] = []         # edited[i] was cut mid-sentence
         self.pending = ""
         self.chunked = 0
         self.chunk_timings: dict = {}
