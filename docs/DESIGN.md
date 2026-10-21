@@ -123,6 +123,14 @@ Measured after key release, full pipeline, 102 of the user's recordings:
 | 40–90 s | 1.55 s | 3.14 s |
 | over 90 s | 1.34 s | 2.45 s |
 
+Verified in the installed app (live path: Right Option hold, recorder, engine, paste
+into TextEdit, read back through the Accessibility API), with a recording played as the
+microphone: 34 s dictation 2.1 s after release, 2-minute dictation 1.9 s.
+
+Final tuning on the eval set (99 clips): six personal Typeless examples instead of three
+moved MER vs Typeless 32.2 → 31.9 and term recall 81.5 → 82.5; 300 recognizer hotwords
+instead of 220 lowered term recall (79.4) and was slower, so 220 stays.
+
 ## Quality, blind-judged
 
 A separate judge compared outputs pairwise without knowing which system wrote which.
@@ -160,8 +168,9 @@ Left Ctrl+`, VoiceInk Ctrl+Tab) and is a single key.
 ## Open risks
 
 - Long run-on dictations edited in chunks come out as one paragraph instead of a list.
-- Accessibility may need an administrator on this managed Mac; without it the app runs
-  in copy-to-clipboard mode on ⌃⌥Space.
+- Accessibility needs an administrator on this managed Mac. `scripts/dazi-ensure` (run
+  from Orca terminals by ~/.zshrc) starts Dazi under Orca's existing Accessibility and
+  Microphone grants; started any other way it runs in copy-to-clipboard mode on ⌃⌥Space.
 - TCC permissions are tied to the code signature. The app is ad-hoc signed with the
   default code-hash requirement, so a reinstall needs the two permissions re-enabled
   (an identifier-only requirement would let any app reusing the identifier inherit them).
