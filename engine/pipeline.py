@@ -156,13 +156,16 @@ class Pipeline:
             session.lang = session_language(text)
         return text, secs
 
-    def edit(self, raw: str, app_name: str, timings: dict | None = None) -> str:
-        """Post-edits one piece of transcript, with the guard and the minimal-edit retry."""
+    def edit(self, raw: str, app_name: str, timings: dict | None = None, should_stop=None) -> str | None:
+        """Post-edits one piece of transcript, with the guard and the minimal-edit retry.
+        Returns None if `should_stop` interrupted it."""
         fixed = collapse_acronyms(self.lexicon.apply(raw))
         if not self.polisher or not fixed.strip():
             return fixed
         t = timings if timings is not None else {}
-        r = self.polisher.polish(user_message(fixed, app_name), source=fixed)
+        r = self.polisher.polish(user_message(fixed, app_name), source=fixed, should_stop=should_stop)
+        if r.stopped:
+            return None
         t["polish_prefill"] = round(t.get("polish_prefill", 0) + r.prefill_s, 3)
         t["polish_gen"] = round(t.get("polish_gen", 0) + r.gen_s, 3)
         t["polish_tokens"] = t.get("polish_tokens", 0) + r.tokens
@@ -180,7 +183,7 @@ class Pipeline:
             return clean_fillers(self.lexicon.apply(r.text))
         return self.lexicon.apply(r.text)
 
-    def advance_chunks(self, session) -> None:
+    def advance_chunks(self, session, should_stop=None) -> None:
         """Edits the finished part of the recording while the user keeps talking: every
         recognized segment except its last (possibly unfinished) sentence. After release
         only the rest is left to edit."""
@@ -191,10 +194,16 @@ class Pipeline:
             except Exception:
                 return  # finalize re-recognizes failed segments
             session.chunked += 1
+            pending_before = session.pending
             pending = join_texts([session.pending, text]) if session.pending else text
             complete, session.pending, cont = split_complete(pending)
             if len(complete) >= 15:
-                session.edited.append(self.edit(complete, session.app_name, session.chunk_timings))
+                edited = self.edit(complete, session.app_name, session.chunk_timings, should_stop)
+                if edited is None:  # the key was released: finalize takes over from here
+                    session.chunked -= 1
+                    session.pending = pending_before
+                    return
+                session.edited.append(edited)
                 session.continues.append(cont)
             else:
                 session.pending = pending

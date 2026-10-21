@@ -26,7 +26,7 @@ class FakePipeline:
         self.recognized.append(len(audio))
         return f"seg{len(self.recognized)}", 0.01
 
-    def advance_chunks(self, session):
+    def advance_chunks(self, session, should_stop=None):
         session.edited.append("chunk")
 
     def lexicon_changed(self, path):

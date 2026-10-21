@@ -221,7 +221,8 @@ class Server:
         if s.cancelled:
             return
         try:
-            self.pipeline.advance_chunks(s)
+            # Stop as soon as the key is released; finalize edits whatever is left.
+            self.pipeline.advance_chunks(s, should_stop=lambda: s.ended or s.cancelled)
         except Exception:
             log.exception("background edit failed; finalize will redo it")
 

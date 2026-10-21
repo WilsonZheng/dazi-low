@@ -31,6 +31,7 @@ class PolishResult:
     tokens: int
     steps: int = 0
     complete: bool = True  # False if stopped early or hit the length cap
+    stopped: bool = False  # should_stop() asked us to give up
 
 
 class Polisher:
@@ -101,8 +102,12 @@ class Polisher:
         out: list[int] = []
         steps = 0
         complete = True
+        stopped = False
         while y not in self.eos:
-            if len(out) >= limit or (should_stop and should_stop()):
+            if should_stop and should_stop():
+                complete, stopped = False, True
+                break
+            if len(out) >= limit:
                 complete = False
                 break
             out.append(y)
@@ -124,7 +129,7 @@ class Polisher:
         text = self.tok.decode(out)
         text = re.sub(r"^\s*<think>.*?</think>\s*", "", text, flags=re.S).strip()
         return PolishResult(text=text, prefill_s=t1 - t0, gen_s=time.perf_counter() - t1,
-                            tokens=len(out), steps=steps, complete=complete)
+                            tokens=len(out), steps=steps, complete=complete, stopped=stopped)
 
     def _propose(self, out: list[int], sources: list[tuple[list[int], int]]) -> list[int]:
         """Continuation of the latest output n-gram inside a draft source."""

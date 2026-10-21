@@ -249,8 +249,11 @@ final class AppController: NSObject, NSApplicationDelegate {
         maxDurationTimer = limit
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.maxRecording, execute: limit)
         resyncTimer?.invalidate()
-        resyncTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
-            self?.hotkey.resyncPhysicalState()
+        // Synthetic test key presses have no physical state to resync against.
+        if ProcessInfo.processInfo.environment["DAZI_FAKE_MIC"] == nil {
+            resyncTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
+                self?.hotkey.resyncPhysicalState()
+            }
         }
     }
 

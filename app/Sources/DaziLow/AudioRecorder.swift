@@ -20,9 +20,30 @@ final class AudioRecorder {
     private let outFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: sampleRate, channels: 1, interleaved: false)!
     private var configObserver: NSObjectProtocol?
 
+    /// Test hook: DAZI_FAKE_MIC=/path/file.wav plays that file as the microphone, in real
+    /// time, so the whole live path (hotkey, HUD, engine, paste) can be tested end to end.
+    private let fakeMic = ProcessInfo.processInfo.environment["DAZI_FAKE_MIC"]
+    private var fakeTimer: DispatchSourceTimer?
+
     func start() throws {
         guard !isRunning else { return }
         restarts = 0
+        if let path = fakeMic {
+            let samples = try SelfTest.loadMono16k(path)
+            var pos = 0
+            let t = DispatchSource.makeTimerSource(queue: DispatchQueue(label: "dazi.fakemic"))
+            t.schedule(deadline: .now(), repeating: .milliseconds(100))
+            t.setEventHandler { [weak self] in
+                let end = min(pos + 1600, samples.count)
+                let chunk = pos < end ? Array(samples[pos..<end]) : [Float](repeating: 0, count: 1600)
+                pos = end
+                self?.onChunk?(chunk)
+            }
+            fakeTimer = t
+            t.resume()
+            isRunning = true
+            return
+        }
         // A fresh engine every time: a reused one can hold a stale input format after a
         // device change, and installTap then raises an Objective-C exception.
         engine = AVAudioEngine()
@@ -40,6 +61,12 @@ final class AudioRecorder {
 
     func stop() {
         guard isRunning else { return }
+        if let t = fakeTimer {
+            t.cancel()
+            fakeTimer = nil
+            isRunning = false
+            return
+        }
         if let o = configObserver { NotificationCenter.default.removeObserver(o) }
         configObserver = nil
         engine.inputNode.removeTap(onBus: 0)
