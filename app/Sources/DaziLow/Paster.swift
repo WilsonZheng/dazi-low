@@ -22,7 +22,7 @@ enum Paster {
         postCommandV()
 
         // Give the target app time to read the clipboard before restoring it.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
             guard pb.changeCount == ours else { return } // user copied something meanwhile
             restore(saved, to: pb)
         }

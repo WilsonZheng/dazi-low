@@ -22,16 +22,19 @@ class FakePipeline:
     def warmup(self):
         pass
 
-    def recognize(self, audio):
+    def recognize_segment(self, session, audio):
         self.recognized.append(len(audio))
         return f"seg{len(self.recognized)}", 0.01
 
-    def maybe_reload_lexicon(self, path, max_hotwords):
-        pass
+    def prepolish(self, session, should_stop):
+        session.prior = "prior"
+
+    def lexicon_changed(self, path):
+        return False
 
     def finalize(self, session):
         parts = [f.result()[0] for _, _, f in session.segments]
-        return {"text": " ".join(parts + [f"tail({session.n})"]), "raw": "raw", "timings": {}}
+        return {"text": " ".join(parts + [f"tail({session.n})"]), "raw": session.prior or "", "timings": {}}
 
 
 class ServerProtocolTest(unittest.TestCase):
@@ -39,6 +42,7 @@ class ServerProtocolTest(unittest.TestCase):
         self.tmp = tempfile.mkdtemp()
         self.sock = os.path.join(self.tmp, "e.sock")
         server.Pipeline = FakePipeline
+        server._limit_memory = lambda: None
 
     async def _client(self, srv):
         for _ in range(100):
@@ -68,8 +72,8 @@ class ServerProtocolTest(unittest.TestCase):
             while not ready["ready"]:
                 ready = await self._read(reader, "status")
 
-            # 12 s of speech, a pause, 3 s more: one background segment + tail.
-            t = np.arange(12 * 16000) / 16000
+            # 14 s of speech, a pause, 3 s more: one background segment + tail.
+            t = np.arange(14 * 16000) / 16000
             speech = (0.2 * np.sin(2 * np.pi * 220 * t)).astype(np.float32)
             audio = np.concatenate([speech, np.zeros(16000, np.float32), speech[: 3 * 16000]])
             self.send(writer, {"type": "begin", "id": "a", "app": "x", "app_name": "X"})
@@ -81,6 +85,7 @@ class ServerProtocolTest(unittest.TestCase):
             self.assertEqual(res["id"], "a")
             self.assertTrue(res["text"].startswith("seg1 tail("), res["text"])
             self.assertIn("after_release", res["timings"])
+            self.assertEqual(res["raw"], "prior", "background post-edit ran")
 
             # Cancelled sessions produce nothing.
             self.send(writer, {"type": "begin", "id": "b"})

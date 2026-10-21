@@ -9,8 +9,9 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from lexicon import Lexicon  # noqa: E402
-from pipeline import accept_polished, novelty  # noqa: E402
-from segmenter import SR, Segmenter, join_texts, session_language  # noqa: E402
+from guard import accept_polished, check, coverage, novelty  # noqa: E402
+from pipeline import collapse_acronyms  # noqa: E402
+from segmenter import SR, Segmenter, has_speech, join_texts, session_language  # noqa: E402
 
 
 def tone(seconds: float, amp: float = 0.2) -> np.ndarray:
@@ -33,18 +34,24 @@ def feed(seg: Segmenter, audio: np.ndarray) -> list[int]:
 
 class SegmenterTest(unittest.TestCase):
     def test_cuts_in_pause_after_min_length(self):
-        audio = np.concatenate([tone(10), silence(0.6), tone(5)])
+        audio = np.concatenate([tone(14), silence(0.6), tone(5)])
         cuts = feed(Segmenter(), audio)
         self.assertEqual(len(cuts), 1)
-        self.assertTrue(10 * SR < cuts[0] < 10.6 * SR, cuts[0] / SR)
+        self.assertTrue(14 * SR < cuts[0] < 14.6 * SR, cuts[0] / SR)
 
     def test_ignores_pause_before_min_length(self):
         audio = np.concatenate([tone(3), silence(0.6), tone(4)])
         self.assertEqual(feed(Segmenter(), audio), [])
 
-    def test_waits_while_still_in_pause(self):
-        seg = Segmenter()
-        self.assertEqual(feed(seg, np.concatenate([tone(9), silence(1.0)])), [])
+    def test_cuts_eagerly_inside_trailing_pause(self):
+        cuts = feed(Segmenter(), np.concatenate([tone(13), silence(1.0)]))
+        self.assertEqual(len(cuts), 1)
+        self.assertTrue(13 * SR < cuts[0] < 13.5 * SR, cuts[0] / SR)
+
+    def test_silence_detection(self):
+        self.assertFalse(has_speech(silence(2)))
+        self.assertFalse(has_speech(np.random.default_rng(0).normal(0, 0.002, 32000).astype(np.float32)))
+        self.assertTrue(has_speech(tone(0.5, amp=0.05)))
 
     def test_forces_cut_without_pause(self):
         cuts = feed(Segmenter(max_segment_s=20), tone(26))
@@ -88,10 +95,26 @@ class LexiconTest(unittest.TestCase):
         self.assertEqual(lex.apply("加一个 index"), "加一个 index", "medium rules are not applied")
         self.assertEqual(lex.apply("metadata dogs"), "metadata dogs", "word boundaries")
 
+    def test_rules_skip_urls_and_respect_case(self):
+        lex = self.load({"replacements": [
+            {"from": ["github"], "to": "GitHub", "confidence": "high"},
+            {"from": ["ORCA"], "to": "Orca", "confidence": "high", "match": "case_sensitive"},
+        ], "uncertain_replacements": [{"from": ["Cuffback"], "to": "Kafbat"}]})
+        self.assertEqual(lex.apply("看 github 和 github.com 还有 .github/workflows"),
+                         "看 GitHub 和 github.com 还有 .github/workflows")
+        self.assertEqual(lex.apply("ORCA orca"), "Orca orca")
+        self.assertIn(("Cuffback", "Kafbat"), lex.misheard)
+
     def test_missing_file_is_empty(self):
         lex = Lexicon.load("/nonexistent/lexicon.json")
         self.assertEqual(lex.terms, [])
         self.assertEqual(lex.apply("x"), "x")
+
+
+class AcronymTest(unittest.TestCase):
+    def test_collapse(self):
+        self.assertEqual(collapse_acronyms("开一个 P.R. 然后跑 C I C D"), "开一个 PR 然后跑 CI/CD")
+        self.assertEqual(collapse_acronyms("I am OK"), "I am OK")
 
 
 class GuardTest(unittest.TestCase):
@@ -109,6 +132,19 @@ class GuardTest(unittest.TestCase):
     def test_rejects_truncation_and_empty(self):
         self.assertFalse(accept_polished(self.raw, ""))
         self.assertFalse(accept_polished(self.raw, "PR？"))
+
+    def test_rejects_short_answer_and_dropped_sentence(self):
+        self.assertEqual(check("帮我总结一下。", "好的。"), "short answer")
+        raw = "你先把 PR 合并了。然后去 nonprod 验证一下部署有没有问题。我批准了才动手，你先别改 production。"
+        self.assertEqual(check(raw, "你先把 PR 合并了，然后去 nonprod 验证一下部署有没有问题。"), "dropped sentence")
+        self.assertIsNone(check(raw, raw))
+
+    def test_rejects_added_politeness(self):
+        raw = "你看看选哪个比较好，我周三周四在家"
+        self.assertEqual(check(raw, "您看看选哪个比较好？我周三、周四在家。"), "added marker")
+
+    def test_spoken_digits_match(self):
+        self.assertGreater(coverage("这个一五零九的 PR 改了什么", "这个 1509 的 PR 改了什么"), 0.99)
 
     def test_vocabulary_fixes_are_not_novel(self):
         raw = "用 clock code 跑一下"

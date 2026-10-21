@@ -81,6 +81,28 @@ class Recognizer:
             if tid in self.eos:
                 break
             out.append(tid)
+            if len(out) % 8 == 0 and _looping(out):
+                out = _trim_loop(out)
+                break
             y = nxt
         text = self.tok.decode(out)
         return _LANG_TAG.sub("", text).strip(), time.perf_counter() - t
+
+
+def _looping(out: list[int], min_k: int = 4, max_k: int = 40) -> bool:
+    """True when the output ends with the same k tokens three times in a row, the
+    classic decoder repetition loop (real speech almost never does that)."""
+    for k in range(min_k, min(max_k, len(out) // 3) + 1):
+        if out[-k:] == out[-2 * k:-k] == out[-3 * k:-2 * k]:
+            return True
+    return False
+
+
+def _trim_loop(out: list[int], min_k: int = 4, max_k: int = 40) -> list[int]:
+    for k in range(min_k, min(max_k, len(out) // 3) + 1):
+        if out[-k:] == out[-2 * k:-k] == out[-3 * k:-2 * k]:
+            end = len(out) - 2 * k
+            while end - k >= 0 and out[end - k:end] == out[end:end + k]:
+                end -= k
+            return out[:end + k]
+    return out

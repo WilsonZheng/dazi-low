@@ -120,5 +120,6 @@ Left Ctrl+`, VoiceInk Ctrl+Tab) and is a single key.
 
 - Prompt-lookup gains on hybrid (DeltaNet) models are limited because rejected drafts
   must be replayed; measured separately on an idle GPU.
-- TCC permissions are tied to the code signature; the app is ad-hoc signed with a
-  designated requirement on its bundle identifier so rebuilds keep the grants.
+- TCC permissions are tied to the code signature. The app is ad-hoc signed with the
+  default code-hash requirement, so a reinstall needs the two permissions re-enabled
+  (an identifier-only requirement would let any app reusing the identifier inherit them).

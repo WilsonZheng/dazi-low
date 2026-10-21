@@ -1,5 +1,6 @@
 import AppKit
 import AVFoundation
+import Carbon.HIToolbox
 import ServiceManagement
 
 /// Wires hotkey, microphone, engine and paste together.
@@ -10,21 +11,28 @@ final class AppController: NSObject, NSApplicationDelegate {
     private let engineProcess = EngineProcess()
     private lazy var engine = EngineClient(socketPath: Paths.socket)
     private var statusItem: NSStatusItem!
-    private var statusLine = NSMenuItem(title: "引擎启动中…", action: nil, keyEquivalent: "")
-    private var lastItem = NSMenuItem(title: "复制上一条", action: #selector(copyLast), keyEquivalent: "")
-    private var loginItem = NSMenuItem(title: "登录时自动启动", action: #selector(toggleLogin), keyEquivalent: "")
+    private let statusLine = NSMenuItem(title: "状态：启动中…", action: nil, keyEquivalent: "")
+    private let permissionLine = NSMenuItem(title: "", action: #selector(openAccessibilitySettings), keyEquivalent: "")
+    private let lastItem = NSMenuItem(title: "复制上一条", action: #selector(copyLast), keyEquivalent: "")
+    private let loginItem = NSMenuItem(title: "登录时自动启动", action: #selector(toggleLogin), keyEquivalent: "")
 
     private var engineReady = false
     private var engineStatus = "启动中…"
+    private var axTrusted = false
     private var currentID: String?
+    /// Session the audio thread may stream for; only touched on `audioQueue`.
+    private var streamingID: String?
+    private var targetPID: pid_t?
     private var recordingStarted = Date()
     private var pendingTimeout: DispatchWorkItem?
     private var maxDurationTimer: DispatchWorkItem?
+    private var resyncTimer: Timer?
     private var lastText: String?
     private let audioQueue = DispatchQueue(label: "dazi.audio.send")
 
     static let maxRecording: TimeInterval = 600
-    static let resultTimeout: TimeInterval = 45
+    /// Keep listening this long after release so the last syllable is not clipped.
+    static let tailPadding: TimeInterval = 0.2
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         Paths.ensure()
@@ -32,10 +40,13 @@ final class AppController: NSObject, NSApplicationDelegate {
         hud.levelProvider = { [weak self] in self?.recorder.level ?? 0 }
 
         engine.onMessage = { [weak self] msg in self?.handleEngine(msg) }
-        engine.onDisconnect = { [weak self] in
+        engine.onDisconnect = { [weak self] in self?.engineLost() }
+        engineProcess.onProblem = { [weak self] problem in
             self?.engineReady = false
-            self?.setStatus("引擎重连中…")
-            self?.scheduleConnect()
+            switch problem {
+            case .notInstalled: self?.setStatus("引擎未安装，请运行 scripts/install.sh")
+            case .crashing: self?.setStatus("引擎反复崩溃，请查看日志")
+            }
         }
         engineProcess.start()
         scheduleConnect()
@@ -48,6 +59,36 @@ final class AppController: NSObject, NSApplicationDelegate {
         enableLaunchAtLoginOnce()
     }
 
+    func applicationWillTerminate(_ notification: Notification) {
+        engineProcess.stop()
+    }
+
+    // MARK: - Permissions
+
+    private func requestPermissions() {
+        let opts = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
+        axTrusted = AXIsProcessTrustedWithOptions(opts)
+        updatePermissionLine()
+        if AVCaptureDevice.authorizationStatus(for: .audio) == .notDetermined {
+            AVCaptureDevice.requestAccess(for: .audio) { _ in }
+        }
+        // Accessibility can be granted at any time; pick it up without a relaunch.
+        Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] t in
+            guard let self else { t.invalidate(); return }
+            let now = AXIsProcessTrusted()
+            if now != self.axTrusted {
+                self.axTrusted = now
+                if now { self.hotkey.installMonitors() }
+                self.updatePermissionLine()
+            }
+        }
+    }
+
+    private func updatePermissionLine() {
+        permissionLine.isHidden = axTrusted
+        permissionLine.title = "未开辅助功能：只能用 ⌥Space，结果需手动 ⌘V（点此打开设置）"
+    }
+
     private func enableLaunchAtLoginOnce() {
         let key = "registeredLoginItem"
         if !UserDefaults.standard.bool(forKey: key) {
@@ -57,22 +98,6 @@ final class AppController: NSObject, NSApplicationDelegate {
         loginItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
     }
 
-    func applicationWillTerminate(_ notification: Notification) {
-        engineProcess.stop()
-    }
-
-    // MARK: - Permissions
-
-    private func requestPermissions() {
-        let opts = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
-        if !AXIsProcessTrustedWithOptions(opts) {
-            setStatus("需要辅助功能权限")
-        }
-        if AVCaptureDevice.authorizationStatus(for: .audio) == .notDetermined {
-            AVCaptureDevice.requestAccess(for: .audio) { _ in }
-        }
-    }
-
     // MARK: - Engine connection
 
     private func scheduleConnect(after delay: TimeInterval = 0.5) {
@@ -80,11 +105,23 @@ final class AppController: NSObject, NSApplicationDelegate {
             guard let self else { return }
             if self.engine.connect() {
                 self.engine.send(["type": "hello"])
-            } else {
-                if !self.engineProcess.isRunning { self.engineProcess.start() }
+            } else if self.engineProcess.problem == nil {
                 self.scheduleConnect(after: 1)
             }
         }
+    }
+
+    private func engineLost() {
+        engineReady = false
+        if currentID != nil {
+            if recorder.isRunning { recorder.stop() }
+            audioQueue.async { self.streamingID = nil }
+            finish()
+            hotkey.resetAfterExternalStop()
+            hud.show(.message("引擎断开，请重试"))
+        }
+        setStatus("引擎重连中…")
+        scheduleConnect(after: 1)
     }
 
     private func handleEngine(_ msg: [String: Any]) {
@@ -93,22 +130,41 @@ final class AppController: NSObject, NSApplicationDelegate {
             engineReady = msg["ready"] as? Bool ?? false
             setStatus(msg["text"] as? String ?? (engineReady ? "就绪" : "加载中…"))
         case "result":
-            guard let id = msg["id"] as? String, id == currentID else { return }
-            finish()
             let text = (msg["text"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            if text.isEmpty {
+            guard let id = msg["id"] as? String, id == currentID else {
+                // A late result (after the timeout) is still kept for "复制上一条".
+                if !text.isEmpty { lastText = text; lastItem.isEnabled = true }
+                return
+            }
+            let target = targetPID
+            finish()
+            guard !text.isEmpty else {
                 hud.show(.message("没听清"))
                 return
             }
             lastText = text
             lastItem.isEnabled = true
-            hud.show(.hidden)
-            Paster.insert(text)
+            deliver(text, target: target)
         case "error":
             if let id = msg["id"] as? String, id == currentID { finish() }
             hud.show(.message(msg["text"] as? String ?? "出错了"))
         default:
             break
+        }
+    }
+
+    private func deliver(_ text: String, target: pid_t?) {
+        let front = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        if !AXIsProcessTrusted() {
+            Paster.copy(text)
+            hud.show(.message("已复制，按 ⌘V 粘贴"))
+        } else if let target, front != target {
+            // The user moved to another app while we were working: don't paste blind.
+            Paster.copy(text)
+            hud.show(.message("窗口已切换，已复制"))
+        } else {
+            hud.show(.hidden)
+            Paster.insert(text)
         }
     }
 
@@ -119,37 +175,40 @@ final class AppController: NSObject, NSApplicationDelegate {
         case .start: startRecording()
         case .commit: commitRecording()
         case .cancel: cancelRecording()
-        case .enterHandsFree: if recorder.isRunning { hud.setHandsFree(true) }
+        case .enterHandsFree:
+            if recorder.isRunning { hud.setHandsFree(true) } else { hotkey.resetAfterExternalStop() }
         }
     }
 
+    private func refuse(_ message: String) {
+        hotkey.resetAfterExternalStop()
+        hud.show(.message(message))
+    }
+
     private func startRecording() {
-        guard currentID == nil else { return } // still processing the previous one
-        guard engineReady, engine.isConnected else {
-            hud.show(.message(engineStatus))
-            hotkey.resetAfterExternalStop()
-            return
-        }
+        guard currentID == nil else { return refuse("还在处理上一条") }
+        guard engineReady, engine.isConnected else { return refuse(engineStatus) }
         guard AVCaptureDevice.authorizationStatus(for: .audio) == .authorized else {
-            hud.show(.message("需要麦克风权限"))
             AVCaptureDevice.requestAccess(for: .audio) { _ in }
-            hotkey.resetAfterExternalStop()
-            return
+            return refuse("需要麦克风权限")
         }
+        if IsSecureEventInputEnabled() { return refuse("密码输入中，暂不能听写") }
+
         let id = UUID().uuidString
         let front = NSWorkspace.shared.frontmostApplication
+        targetPID = front?.processIdentifier
         engine.send(["type": "begin", "id": id,
                      "app": front?.bundleIdentifier ?? "", "app_name": front?.localizedName ?? ""])
         currentID = id
+        audioQueue.sync { streamingID = id }
         recordingStarted = Date()
         do {
             try recorder.start()
         } catch {
             engine.send(["type": "cancel", "id": id])
+            audioQueue.sync { streamingID = nil }
             currentID = nil
-            hotkey.resetAfterExternalStop()
-            hud.show(.message(error.localizedDescription))
-            return
+            return refuse(error.localizedDescription)
         }
         Sound.start()
         hud.show(.listening(handsFree: false))
@@ -159,41 +218,52 @@ final class AppController: NSObject, NSApplicationDelegate {
         }
         maxDurationTimer = limit
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.maxRecording, execute: limit)
+        resyncTimer?.invalidate()
+        resyncTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
+            self?.hotkey.resyncPhysicalState()
+        }
     }
 
     private func commitRecording() {
         guard let id = currentID, recorder.isRunning else { return }
         maxDurationTimer?.cancel()
-        recorder.stop()
+        resyncTimer?.invalidate()
+        hud.show(.processing)
         let duration = Date().timeIntervalSince(recordingStarted)
-        audioQueue.async { [weak self] in
-            // Flush after all queued audio chunks.
-            DispatchQueue.main.async {
-                guard let self else { return }
-                if duration < 0.35 {
-                    self.engine.send(["type": "cancel", "id": id])
-                    self.finish()
-                    self.hud.show(.hidden)
-                    return
-                }
-                Sound.stop()
-                self.engine.send(["type": "end", "id": id])
-                self.hud.show(.processing)
-                let timeout = DispatchWorkItem { [weak self] in
-                    guard let self, self.currentID == id else { return }
-                    self.finish()
-                    self.hud.show(.message("超时，请重试"))
-                }
-                self.pendingTimeout = timeout
-                DispatchQueue.main.asyncAfter(deadline: .now() + Self.resultTimeout, execute: timeout)
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.tailPadding) { [weak self] in
+            guard let self, self.currentID == id else { return }
+            self.recorder.stop()
+            self.audioQueue.async {
+                // Runs after every queued chunk; later tap callbacks are dropped.
+                self.streamingID = nil
+                DispatchQueue.main.async { self.sendEnd(id, duration: duration) }
             }
         }
     }
 
+    private func sendEnd(_ id: String, duration: TimeInterval) {
+        guard currentID == id else { return }
+        if duration < 0.35 {
+            engine.send(["type": "cancel", "id": id])
+            finish()
+            hud.show(.hidden)
+            return
+        }
+        Sound.stop()
+        engine.send(["type": "end", "id": id])
+        let timeout = DispatchWorkItem { [weak self] in
+            guard let self, self.currentID == id else { return }
+            self.finish()
+            self.hud.show(.message("超时，可在菜单里复制上一条"))
+        }
+        pendingTimeout = timeout
+        DispatchQueue.main.asyncAfter(deadline: .now() + 30 + duration * 0.5, execute: timeout)
+    }
+
     private func cancelRecording() {
         guard let id = currentID, recorder.isRunning else { return }
-        maxDurationTimer?.cancel()
         recorder.stop()
+        audioQueue.async { self.streamingID = nil }
         engine.send(["type": "cancel", "id": id])
         finish()
         hud.show(.hidden)
@@ -202,12 +272,14 @@ final class AppController: NSObject, NSApplicationDelegate {
     private func finish() {
         pendingTimeout?.cancel()
         maxDurationTimer?.cancel()
+        resyncTimer?.invalidate()
         currentID = nil
+        targetPID = nil
     }
 
     private func sendAudio(_ samples: [Float]) {
         audioQueue.async { [weak self] in
-            guard let self, let id = self.currentID else { return }
+            guard let self, let id = self.streamingID else { return }
             var pcm = [Int16](repeating: 0, count: samples.count)
             for i in 0..<samples.count {
                 pcm[i] = Int16(max(-1, min(1, samples[i])) * 32767)
@@ -221,11 +293,15 @@ final class AppController: NSObject, NSApplicationDelegate {
 
     private func setupStatusItem() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        statusItem.button?.image = NSImage(systemSymbolName: "mic", accessibilityDescription: "Dazi")
+        statusItem.button?.image = NSImage(systemSymbolName: "mic.slash", accessibilityDescription: "Dazi")
         let menu = NSMenu()
         statusLine.isEnabled = false
         menu.addItem(statusLine)
-        menu.addItem(NSMenuItem(title: "按住右侧 ⌥ 说话，松开插入；轻点一下为免提", action: nil, keyEquivalent: ""))
+        permissionLine.target = self
+        menu.addItem(permissionLine)
+        let help = NSMenuItem(title: "按住右侧 ⌥ 或 ⌥Space 说话，松开插入；轻点为免提，Esc 取消", action: nil, keyEquivalent: "")
+        help.isEnabled = false
+        menu.addItem(help)
         menu.addItem(.separator())
         lastItem.target = self
         lastItem.isEnabled = false
@@ -259,11 +335,17 @@ final class AppController: NSObject, NSApplicationDelegate {
     @objc private func openLexicon() { NSWorkspace.shared.open(Paths.lexicon) }
     @objc private func openHistory() { NSWorkspace.shared.open(Paths.history) }
     @objc private func openLog() { NSWorkspace.shared.open(Paths.engineLog) }
+    @objc private func openAccessibilitySettings() {
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
+            NSWorkspace.shared.open(url)
+        }
+    }
     @objc private func restartEngine() {
         engineReady = false
         setStatus("重启中…")
-        engine.disconnect()
+        engine.disconnect() // does not fire onDisconnect, so reconnect explicitly
         engineProcess.restart()
+        scheduleConnect(after: 1.5)
     }
     @objc private func toggleLogin() {
         do {

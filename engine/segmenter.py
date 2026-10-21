@@ -12,7 +12,7 @@ FRAME = 480  # 30 ms
 
 
 class Segmenter:
-    def __init__(self, min_segment_s: float = 8.0, max_segment_s: float = 28.0,
+    def __init__(self, min_segment_s: float = 12.0, max_segment_s: float = 28.0,
                  min_pause_s: float = 0.45):
         self.min_seg = int(min_segment_s * SR)
         self.max_seg = int(max_segment_s * SR)
@@ -59,8 +59,11 @@ class Segmenter:
                     while j + 1 < len(e) and e[j + 1] < thr:
                         j += 1
                     if j == len(e) - 1:
-                        return None  # still inside the pause; wait for speech to resume
-                    cut = ((i + j) // 2) * FRAME
+                        # Still inside the pause: cut now, a little into it, so the part
+                        # before is recognized even if the user releases the key here.
+                        cut = (i + self.min_pause_frames // 2) * FRAME
+                    else:
+                        cut = ((i + j) // 2) * FRAME
                     self.last_cut = cut
                     return cut
             else:
@@ -81,6 +84,16 @@ class Segmenter:
 
 
 _CJK = re.compile(r"[\u3400-\u9fff]")
+
+
+def has_speech(audio: np.ndarray, min_s: float = 0.15) -> bool:
+    """False for (near) silence, which the recognizer would otherwise fill with words."""
+    n = len(audio) // FRAME
+    if n == 0:
+        return False
+    frames = audio[: n * FRAME].reshape(n, FRAME)
+    rms = np.sqrt((frames ** 2).mean(axis=1) + 1e-12)
+    return int((rms > 0.006).sum()) * FRAME >= min_s * SR
 
 
 def session_language(first_text: str) -> str | None:

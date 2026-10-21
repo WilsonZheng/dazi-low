@@ -14,6 +14,7 @@ from __future__ import annotations
 import re
 import time
 from dataclasses import dataclass
+from typing import Callable
 
 import mlx.core as mx
 from mlx_lm import load
@@ -29,14 +30,16 @@ class PolishResult:
     gen_s: float
     tokens: int
     steps: int = 0
+    complete: bool = True  # False if stopped early or hit the length cap
 
 
 class Polisher:
     def __init__(self, model_path: str, system_prompt: str, max_tokens: int = 2048,
-                 draft_len: int = 12, lookup: bool = True):
+                 draft_len: int = 4, prior_draft_len: int = 12, lookup: bool = True):
         self.model, self.tok = load(model_path)
         self.max_tokens = max_tokens
         self.draft_len = draft_len
+        self.prior_draft_len = prior_draft_len
         self.lookup = lookup
         self.eos = set(getattr(self.tok, "eos_token_ids", None) or [self.tok.eos_token_id])
         self.set_system_prompt(system_prompt)
@@ -70,10 +73,18 @@ class Polisher:
 
     # ---------- generation ----------
 
-    def polish(self, user_message: str, source: str | None = None) -> PolishResult:
-        """`source` is the text the output is expected to copy from (the transcript)."""
+    def polish(self, user_message: str, source: str | None = None, prior: str | None = None,
+               should_stop: Callable[[], bool] | None = None) -> PolishResult:
+        """`source` is the transcript the output mostly copies; `prior` is an earlier
+        post-edit of a prefix of it (made while the user was still talking), which is
+        the best draft for the opening of the output. `should_stop` aborts early."""
         ids = self.tok.encode(user_message + self._suffix_tpl, add_special_tokens=False)
         src = self.tok.encode(source if source is not None else user_message, add_special_tokens=False)
+        sources = [(src, self.draft_len)]
+        if prior:
+            sources.insert(0, (self.tok.encode(prior, add_special_tokens=False), self.prior_draft_len))
+        # Edits never grow much: logged outputs stay under 1.18x the transcript tokens.
+        limit = min(self.max_tokens, int(1.3 * len(src)) + 32)
         cache = self._fresh_cache()
         t0 = time.perf_counter()
         logits = self.model(mx.array(ids)[None], cache=cache)
@@ -81,9 +92,14 @@ class Polisher:
         t1 = time.perf_counter()
         out: list[int] = []
         steps = 0
-        while len(out) < self.max_tokens and y not in self.eos:
+        complete = True
+        while y not in self.eos:
+            if len(out) >= limit or (should_stop and should_stop()):
+                complete = False
+                break
             out.append(y)
-            draft = self._propose(out, src) if self.lookup else []
+            draft = self._propose(out, sources) if self.lookup else []
+            draft = draft[: max(0, limit - len(out))]
             snap = _snapshot(cache) if draft else None
             logits = self.model(mx.array([y] + draft)[None], cache=cache)
             preds = mx.argmax(logits[0], axis=-1).tolist()
@@ -100,22 +116,23 @@ class Polisher:
         text = self.tok.decode(out)
         text = re.sub(r"^\s*<think>.*?</think>\s*", "", text, flags=re.S).strip()
         return PolishResult(text=text, prefill_s=t1 - t0, gen_s=time.perf_counter() - t1,
-                            tokens=len(out), steps=steps)
+                            tokens=len(out), steps=steps, complete=complete)
 
-    def _propose(self, out: list[int], src: list[int]) -> list[int]:
-        """Continuation of the latest output n-gram inside the transcript."""
+    def _propose(self, out: list[int], sources: list[tuple[list[int], int]]) -> list[int]:
+        """Continuation of the latest output n-gram inside a draft source."""
         min_n = 2 if self.hybrid else 1  # a rejected guess costs a replay on hybrid models
-        for n in (4, 3, 2, 1):
-            if n < min_n or len(out) < n:
-                continue
-            key = out[-n:]
-            # Prefer the latest occurrence so repeated phrases track the current position.
-            for i in range(len(src) - n, -1, -1):
-                if src[i : i + n] == key:
-                    draft = src[i + n : i + n + self.draft_len]
-                    if draft:
-                        return draft
-                    break
+        for src, length in sources:
+            for n in (4, 3, 2, 1):
+                if n < min_n or len(out) < n:
+                    continue
+                key = out[-n:]
+                # Prefer the latest occurrence so repeated phrases track the current position.
+                for i in range(len(src) - n, -1, -1):
+                    if src[i : i + n] == key:
+                        draft = src[i + n : i + n + length]
+                        if draft:
+                            return draft
+                        break
         return []
 
 

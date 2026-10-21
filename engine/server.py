@@ -8,6 +8,8 @@ Protocol (newline-delimited JSON):
   engine -> {"type":"status","ready":bool,"text":..}
   engine -> {"type":"result","id":..,"text":..,"raw":..,"timings":{..}}
   engine -> {"type":"error","id":..,"text":..}
+Results and errors are broadcast to every client; the app filters by id, so a
+reconnect in the middle of processing does not lose the text.
 """
 
 from __future__ import annotations
@@ -21,6 +23,7 @@ import json
 import logging
 import os
 import sys
+import threading
 import time
 import wave
 
@@ -37,15 +40,19 @@ log = logging.getLogger("dazi")
 
 
 class Session:
-    def __init__(self, sid: str, app: str, app_name: str, seg_cfg: dict):
+    def __init__(self, sid: str, app: str, app_name: str, seg_cfg: dict, writer):
         self.id = sid
         self.app = app
         self.app_name = app_name
+        self.writer = writer
         self.chunks: list[np.ndarray] = []
         self.n = 0
         self.segmenter = Segmenter(**seg_cfg)
         self.segments: list[tuple[int, int, cf.Future]] = []
-        self.started = time.time()
+        self.lang: str | None = None
+        self.prior: str | None = None          # post-edit of the transcript so far
+        self.prior_source: str | None = None
+        self.ended = False
         self.cancelled = False
 
     def audio(self) -> np.ndarray:
@@ -56,14 +63,43 @@ class Server:
     def __init__(self, socket_path: str, support: str):
         self.socket_path = socket_path
         self.support = support
+        self.lexicon_path = os.path.join(support, "lexicon.json")
         self.cfg = load_config(support)
         self.gpu = cf.ThreadPoolExecutor(max_workers=1, thread_name_prefix="gpu")
+        self.pending = 0                       # GPU jobs queued or running
+        self.pending_lock = threading.Lock()
         self.pipeline: Pipeline | None = None
         self.ready = False
         self.status_text = "加载模型中…"
         self.writers: set[asyncio.StreamWriter] = set()
         self.sessions: dict[str, Session] = {}
         self.loop: asyncio.AbstractEventLoop | None = None
+
+    # ---------- GPU queue ----------
+
+    def submit(self, fn, *args) -> cf.Future:
+        with self.pending_lock:
+            self.pending += 1
+
+        def run():
+            try:
+                return fn(*args)
+            finally:
+                with self.pending_lock:
+                    self.pending -= 1
+        fut = self.gpu.submit(run)
+        # A job cancelled before it starts never runs its finally.
+        fut.add_done_callback(lambda f: f.cancelled() and self._dec())
+        return fut
+
+    def _dec(self) -> None:
+        with self.pending_lock:
+            self.pending -= 1
+
+    def gpu_busy_elsewhere(self) -> bool:
+        """True when another job is waiting behind the current one."""
+        with self.pending_lock:
+            return self.pending > 1
 
     # ---------- lifecycle ----------
 
@@ -74,14 +110,16 @@ class Server:
         server = await asyncio.start_unix_server(self.handle_client, path=self.socket_path, limit=16 * 1024 * 1024)
         os.chmod(self.socket_path, 0o600)
         log.info("listening on %s", self.socket_path)
-        self.loop.run_in_executor(self.gpu, self._load)
+        self.submit(self._load)
+        asyncio.ensure_future(self._watch_lexicon())
         async with server:
             await server.serve_forever()
 
     def _load(self) -> None:
         t = time.time()
         try:
-            lex = Lexicon.load(os.path.join(self.support, "lexicon.json"), self.cfg["hotwords_max"])
+            _limit_memory()
+            lex = Lexicon.load(self.lexicon_path, self.cfg["hotwords_max"])
             self.pipeline = Pipeline(self.cfg, lex, status=lambda s: self._set_status(False, s))
             self.pipeline.warmup()
             self._set_status(True, "就绪")
@@ -90,6 +128,23 @@ class Server:
         except Exception as e:  # keep the socket up so the app can show the error
             log.exception("model load failed")
             self._set_status(False, f"模型加载失败：{e}")
+
+    async def _watch_lexicon(self) -> None:
+        """Reloads lexicon.json in the background when it changes, while nobody is talking."""
+        while True:
+            await asyncio.sleep(3)
+            p = self.pipeline
+            if not p or not self.ready or self.sessions or self.pending:
+                continue
+            try:
+                if p.lexicon_changed(self.lexicon_path):
+                    def reload():
+                        p.reload_lexicon(Lexicon.load(self.lexicon_path, self.cfg["hotwords_max"]))
+                        log.info("lexicon reloaded: %d terms", len(p.lexicon.terms))
+                    await asyncio.wrap_future(self.submit(reload))
+            except Exception:
+                log.exception("lexicon reload failed; keeping the previous one")
+                p.lexicon.mtime = os.path.getmtime(self.lexicon_path)  # don't retry every 3 s
 
     def _set_status(self, ready: bool, text: str) -> None:
         self.ready, self.status_text = ready, text
@@ -115,14 +170,16 @@ class Server:
         try:
             while line := await reader.readline():
                 try:
-                    msg = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                self.dispatch(msg, writer)
+                    self.dispatch(json.loads(line), writer)
+                except Exception:
+                    log.exception("bad message ignored")
         except (ConnectionResetError, asyncio.IncompleteReadError):
             pass
         finally:
             self.writers.discard(writer)
+            # Recordings this client was still streaming can never finish.
+            for sid in [sid for sid, s in self.sessions.items() if s.writer is writer]:
+                self._cancel(self.sessions.pop(sid))
             writer.close()
 
     def dispatch(self, msg: dict, writer: asyncio.StreamWriter) -> None:
@@ -130,7 +187,7 @@ class Server:
         if kind == "hello":
             self._send(writer, {"type": "status", "ready": self.ready, "text": self.status_text})
         elif kind == "begin" and sid:
-            self.sessions[sid] = Session(sid, msg.get("app", ""), msg.get("app_name", ""), self.cfg["segment"])
+            self.sessions[sid] = Session(sid, msg.get("app", ""), msg.get("app_name", ""), self.cfg["segment"], writer)
         elif kind == "audio" and sid in self.sessions:
             s = self.sessions[sid]
             pcm = np.frombuffer(base64.b64decode(msg["pcm16"]), dtype="<i2").astype(np.float32) / 32768.0
@@ -139,44 +196,61 @@ class Server:
             cut = s.segmenter.feed(pcm) if self.cfg["incremental"] else None
             if cut is not None and self.pipeline:
                 start = s.segments[-1][1] if s.segments else 0
-                audio = s.audio()[start:cut]
-                fut = self.gpu.submit(self.pipeline.recognize, audio)
+                fut = self.submit(self.pipeline.recognize_segment, s, s.audio()[start:cut])
                 s.segments.append((start, cut, fut))
+                if self.cfg["prepolish"]:
+                    self.submit(self._prepolish, s)
         elif kind == "cancel" and sid in self.sessions:
-            self.sessions.pop(sid).cancelled = True
+            self._cancel(self.sessions.pop(sid))
         elif kind == "end" and sid in self.sessions:
             s = self.sessions.pop(sid)
-            asyncio.ensure_future(self.finish(s, writer))
+            s.ended = True
+            asyncio.ensure_future(self.finish(s))
 
-    async def finish(self, s: Session, writer: asyncio.StreamWriter) -> None:
-        t_end = time.time()
-        if not self.pipeline or not self.ready:
-            self._send(writer, {"type": "error", "id": s.id, "text": self.status_text})
+    def _cancel(self, s: Session) -> None:
+        s.cancelled = True
+        for _, _, fut in s.segments:
+            fut.cancel()
+
+    def _prepolish(self, s: Session) -> None:
+        if s.ended or s.cancelled or self.gpu_busy_elsewhere():
             return
         try:
-            result = await self.loop.run_in_executor(self.gpu, self._finalize, s)
-        except Exception as e:
-            log.exception("finalize failed")
-            self._send(writer, {"type": "error", "id": s.id, "text": f"出错了：{e}"})
-            return
-        result["timings"]["after_release"] = round(time.time() - t_end, 3)
-        self._send(writer, {"type": "result", "id": s.id, **result})
-        log.info("result %.1fs audio, %.2fs after release, %s", s.n / 16000,
-                 result["timings"]["after_release"], json.dumps(result["timings"]))
-        try:
-            self.save_history(s, result)
+            self.pipeline.prepolish(s, should_stop=lambda: s.ended or s.cancelled or self.gpu_busy_elsewhere())
         except Exception:
-            log.exception("history save failed")
+            log.exception("background post-edit failed (ignored)")
+
+    async def finish(self, s: Session) -> None:
+        t_end = time.time()
+        result = None
+        try:
+            if not self.pipeline or not self.ready:
+                self._broadcast({"type": "error", "id": s.id, "text": self.status_text})
+                return
+            try:
+                result = await asyncio.wrap_future(self.submit(self._finalize, s))
+            except Exception as e:
+                log.exception("finalize failed")
+                self._broadcast({"type": "error", "id": s.id, "text": f"出错了：{e}"})
+                return
+            result["timings"]["after_release"] = round(time.time() - t_end, 3)
+            self._broadcast({"type": "result", "id": s.id, **result})
+            log.info("result %.1fs audio, %.2fs after release, %s", s.n / 16000,
+                     result["timings"]["after_release"], json.dumps(result["timings"]))
+        finally:
+            try:
+                self.save_history(s, result)  # the audio is kept even when processing failed
+            except Exception:
+                log.exception("history save failed")
 
     def _finalize(self, s: Session) -> dict:
         try:
-            self.pipeline.maybe_reload_lexicon(os.path.join(self.support, "lexicon.json"), self.cfg["hotwords_max"])
-        except Exception:
-            log.exception("lexicon reload failed; keeping the previous one")
-        return self.pipeline.finalize(s)
+            return self.pipeline.finalize(s)
+        finally:
+            _release_buffers()
 
-    def save_history(self, s: Session, result: dict) -> None:
-        if not self.cfg["keep_history"]:
+    def save_history(self, s: Session, result: dict | None) -> None:
+        if not self.cfg["keep_history"] or s.n == 0:
             return
         day = dt.datetime.now().strftime("%Y-%m-%d")
         hdir = os.path.join(self.support, "history")
@@ -190,19 +264,48 @@ class Server:
             w.setframerate(16000)
             w.writeframes(pcm.tobytes())
         rec = {"id": s.id, "ts": dt.datetime.now().isoformat(timespec="seconds"), "app": s.app,
-               "app_name": s.app_name, "duration": round(s.n / 16000, 2), "raw": result["raw"],
-               "text": result["text"], "timings": result["timings"], "audio": wav_path}
+               "app_name": s.app_name, "duration": round(s.n / 16000, 2), "audio": wav_path}
+        if result:
+            rec.update(raw=result["raw"], text=result["text"], timings=result["timings"])
+        else:
+            rec["failed"] = True
         with open(os.path.join(hdir, f"{day}.jsonl"), "a", encoding="utf-8") as f:
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+
+
+def _limit_memory() -> None:
+    """Keep model weights wired (this machine swaps heavily) and cap MLX's buffer cache."""
+    try:
+        import mlx.core as mx
+        mx.set_wired_limit(int(9.5 * 1024 ** 3))
+        mx.set_cache_limit(1024 ** 3)
+    except Exception:
+        log.exception("could not set MLX memory limits")
+
+
+def _release_buffers() -> None:
+    try:
+        import mlx.core as mx
+        mx.clear_cache()
+    except Exception:
+        pass
 
 
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--socket", required=True)
     ap.add_argument("--support", required=True)
+    ap.add_argument("--exit-on-stdin-eof", action="store_true",
+                    help="exit when the parent app goes away (it holds our stdin open)")
     a = ap.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s", stream=sys.stderr)
     os.makedirs(a.support, exist_ok=True)
+    if a.exit_on_stdin_eof:
+        def watch_parent() -> None:
+            sys.stdin.buffer.read()
+            log.info("app went away; exiting")
+            os._exit(0)
+        threading.Thread(target=watch_parent, daemon=True).start()
     asyncio.run(Server(a.socket, a.support).run())
 
 

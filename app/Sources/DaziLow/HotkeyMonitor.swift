@@ -1,22 +1,38 @@
 import AppKit
+import Carbon.HIToolbox
 
-/// Watches the Right Option key globally and feeds `HotkeyStateMachine`.
-/// Needs the Accessibility permission to see key events of other apps.
+/// Feeds `HotkeyStateMachine` from two sources:
+/// - Right Option alone, via NSEvent monitors (needs the Accessibility permission).
+/// - ⌥Space, via a Carbon hot key, which works without any permission, so dictation
+///   still works (copy-to-clipboard mode) before Accessibility is granted.
 final class HotkeyMonitor {
     private static let rightOptionKeyCode: UInt16 = 61
     private static let escapeKeyCode: UInt16 = 53
     /// NX_DEVICERALTKEYMASK: set while the right Option key is physically down.
-    private static let rightOptionDeviceMask: UInt = 0x40
+    private static let rightOptionDeviceMask: UInt64 = 0x40
 
     var onAction: ((HotkeyStateMachine.Action) -> Void)?
 
     private var machine = HotkeyStateMachine()
     private var monitors: [Any] = []
     private var rightOptionDown = false
+    private var comboDown = false
+    private var hotKeyRef: EventHotKeyRef?
+    private var handlerRef: EventHandlerRef?
 
     var isRecording: Bool { machine.isRecording }
+    var isHolding: Bool { if case .holding = machine.state { return true }; return false }
 
     func start() {
+        installMonitors()
+        registerCombo()
+    }
+
+    /// (Re)installs the NSEvent monitors; call again once Accessibility is granted,
+    /// because monitors installed before that usually receive nothing.
+    func installMonitors() {
+        monitors.forEach(NSEvent.removeMonitor)
+        monitors.removeAll()
         let mask: NSEvent.EventTypeMask = [.flagsChanged, .keyDown]
         if let global = NSEvent.addGlobalMonitorForEvents(matching: mask, handler: { [weak self] e in self?.handle(e) }) {
             monitors.append(global)
@@ -26,39 +42,74 @@ final class HotkeyMonitor {
         }
     }
 
-    func stop() {
-        monitors.forEach(NSEvent.removeMonitor)
-        monitors.removeAll()
+    /// Called when the app ends a recording on its own (time limit, error, busy).
+    func resetAfterExternalStop() {
+        machine.reset(keyStillDown: rightOptionDown || comboDown)
     }
 
-    /// Called when the app ends a recording on its own (time limit, error).
-    func resetAfterExternalStop() {
-        machine.reset(keyStillDown: rightOptionDown)
+    /// Recovers from a missed key-up (e.g. released while secure input was on).
+    func resyncPhysicalState() {
+        guard rightOptionDown, !comboDown else { return }
+        let flags = CGEventSource.flagsState(.combinedSessionState).rawValue
+        if flags & Self.rightOptionDeviceMask == 0 {
+            rightOptionDown = false
+            emit(machine.keyUp(at: ProcessInfo.processInfo.systemUptime))
+        }
+    }
+
+    private func emit(_ action: HotkeyStateMachine.Action?) {
+        if let action { onAction?(action) }
     }
 
     private func handle(_ event: NSEvent) {
-        let now = ProcessInfo.processInfo.systemUptime
-        var action: HotkeyStateMachine.Action?
+        // event.timestamp shares systemUptime's clock and is immune to main-thread stalls.
+        let now = event.timestamp
         switch event.type {
         case .flagsChanged:
+            let down = UInt64(event.modifierFlags.rawValue) & Self.rightOptionDeviceMask != 0
             if event.keyCode == Self.rightOptionKeyCode {
-                let down = event.modifierFlags.rawValue & Self.rightOptionDeviceMask != 0
                 guard down != rightOptionDown else { return }
                 rightOptionDown = down
-                action = down ? machine.keyDown(at: now) : machine.keyUp(at: now)
+                emit(down ? machine.keyDown(at: now) : machine.keyUp(at: now))
             } else if rightOptionDown {
-                // Another modifier while holding Right Option: a shortcut chord.
-                action = machine.otherKeyDown(at: now)
+                if !down { // the release was missed; the flags say it is up now
+                    rightOptionDown = false
+                    emit(machine.keyUp(at: now))
+                } else {
+                    emit(machine.otherKeyDown(at: now)) // another modifier: a shortcut chord
+                }
             }
         case .keyDown:
             if event.keyCode == Self.escapeKeyCode {
-                action = machine.escape(keyStillDown: rightOptionDown)
-            } else {
-                action = machine.otherKeyDown(at: now)
+                emit(machine.escape(keyStillDown: rightOptionDown || comboDown))
+            } else if !comboDown {
+                emit(machine.otherKeyDown(at: now))
             }
         default:
             break
         }
-        if let action { onAction?(action) }
+    }
+
+    // MARK: - ⌥Space via Carbon (no permission needed)
+
+    private func registerCombo() {
+        var spec = [EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed)),
+                    EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyReleased))]
+        let me = Unmanaged.passUnretained(self).toOpaque()
+        InstallEventHandler(GetApplicationEventTarget(), { _, event, user -> OSStatus in
+            guard let event, let user else { return noErr }
+            let monitor = Unmanaged<HotkeyMonitor>.fromOpaque(user).takeUnretainedValue()
+            monitor.handleCombo(pressed: GetEventKind(event) == UInt32(kEventHotKeyPressed))
+            return noErr
+        }, 2, &spec, me, &handlerRef)
+        let id = EventHotKeyID(signature: OSType(0x445A_4C57), id: 1) // "DZLW"
+        RegisterEventHotKey(UInt32(kVK_Space), UInt32(optionKey), id, GetApplicationEventTarget(), 0, &hotKeyRef)
+    }
+
+    private func handleCombo(pressed: Bool) {
+        let now = ProcessInfo.processInfo.systemUptime
+        guard pressed != comboDown else { return }
+        comboDown = pressed
+        emit(pressed ? machine.keyDown(at: now) : machine.keyUp(at: now))
     }
 }

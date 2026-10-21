@@ -11,7 +11,8 @@ DEFAULTS = {
     "polish": True,
     "hotwords_max": 300,
     "incremental": True,
-    "segment": {"min_segment_s": 8.0, "max_segment_s": 28.0, "min_pause_s": 0.45},
+    "prepolish": True,
+    "segment": {"min_segment_s": 12.0, "max_segment_s": 28.0, "min_pause_s": 0.45},
     "keep_history": True,
 }
 

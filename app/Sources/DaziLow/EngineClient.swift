@@ -46,12 +46,14 @@ final class EngineClient {
         return true
     }
 
+    /// Only the reader thread closes the descriptor; everyone else shuts it down, so a
+    /// reconnect can never be handed a number another thread is still reading.
     func disconnect() {
         lock.lock()
         let s = fd
         fd = -1
         lock.unlock()
-        if s >= 0 { close(s) }
+        if s >= 0 { shutdown(s, SHUT_RDWR) }
     }
 
     func send(_ message: [String: Any]) {
@@ -65,6 +67,7 @@ final class EngineClient {
                 var off = 0
                 while off < raw.count {
                     let n = write(s, raw.baseAddress! + off, raw.count - off)
+                    if n < 0 && errno == EINTR { continue }
                     if n <= 0 { return true }
                     off += n
                 }
@@ -79,6 +82,7 @@ final class EngineClient {
         var chunk = [UInt8](repeating: 0, count: 65_536)
         while true {
             let n = read(s, &chunk, chunk.count)
+            if n < 0 && errno == EINTR { continue }
             if n <= 0 { break }
             buffer.append(chunk, count: n)
             while let nl = buffer.firstIndex(of: 0x0A) {
@@ -90,6 +94,7 @@ final class EngineClient {
             }
         }
         handleDisconnect(s)
+        close(s)
     }
 
     private func handleDisconnect(_ s: Int32) {
@@ -98,7 +103,7 @@ final class EngineClient {
         if wasCurrent { fd = -1 }
         lock.unlock()
         guard wasCurrent else { return }
-        close(s)
+        shutdown(s, SHUT_RDWR)
         DispatchQueue.main.async { self.onDisconnect?() }
     }
 }
