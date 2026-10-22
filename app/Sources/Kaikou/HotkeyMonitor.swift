@@ -23,6 +23,7 @@ final class HotkeyMonitor {
     private var specObserver: NSObjectProtocol?
 
     // Modifier-combo tracking.
+    private var lastTapEnd: TimeInterval = -10
     private var chordDown = false
     private var chordStart: TimeInterval = 0
     private var chordSpoiled = false
@@ -95,7 +96,7 @@ final class HotkeyMonitor {
                 chordDown = true
                 chordStart = event.timestamp
                 chordSpoiled = false
-                if spec.mode == .hold { emit(machine.keyDown(at: event.timestamp)) }
+                if spec.mode == .hold && !spec.isDoubleTap { emit(machine.keyDown(at: event.timestamp)) }
             }
             return
         }
@@ -106,6 +107,10 @@ final class HotkeyMonitor {
         }
         if spec.modifiers & ~bits == 0 { return } // all our keys still down
         chordDown = false
+        if spec.isDoubleTap {
+            handleDoubleTap(at: event.timestamp)
+            return
+        }
         switch spec.mode {
         case .hold:
             emit(machine.keyUp(at: event.timestamp))
@@ -116,6 +121,21 @@ final class HotkeyMonitor {
             } else {
                 AppLog.write("\(spec.display) ignored (spoiled \(chordSpoiled), quick \(quick))")
             }
+        }
+    }
+
+    /// Double-tap specs: two quick taps start; while recording one tap finishes.
+    private func handleDoubleTap(at t: TimeInterval) {
+        let quick = t - chordStart <= 0.35
+        guard quick, !chordSpoiled else { lastTapEnd = -10; return }
+        if machine.isRecording {
+            lastTapEnd = -10
+            emit(machine.toggle())
+        } else if chordStart - lastTapEnd <= 0.45 {
+            lastTapEnd = -10
+            emit(machine.toggle())
+        } else {
+            lastTapEnd = t
         }
     }
 

@@ -4,10 +4,18 @@ import XCTest
 final class HotkeySpecTests: XCTestCase {
     typealias B = HotkeySpec.Bits
 
-    func testDefaultIsLeftControlShiftToggle() {
-        XCTAssertEqual(HotkeySpec.default.display, "左⌃ 左⇧")
-        XCTAssertEqual(HotkeySpec.default.mode, .toggle)
+    func testDefaultIsDoubleTapFn() {
+        XCTAssertEqual(HotkeySpec.default.display, "双击 fn")
+        XCTAssertTrue(HotkeySpec.default.isDoubleTap)
         XCTAssertNil(HotkeySpec.default.problem)
+        XCTAssertTrue(HotkeySpec.default.help.contains("连按两下 fn"))
+    }
+
+    func testOldSavedSpecsStillDecode() throws {
+        let old = #"{"modifiers":262144,"keyCode":48,"mode":"toggle","keyName":"⇥"}"#
+        let s = try JSONDecoder().decode(HotkeySpec.self, from: Data(old.utf8))
+        XCTAssertEqual(s.display, "⌃⇥")
+        XCTAssertFalse(s.isDoubleTap)
     }
 
     func testRejectsEasyToHitKeys() {

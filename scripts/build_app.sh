@@ -12,6 +12,7 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources/engine"
 cp "$BIN" "$APP/Contents/MacOS/Kaikou"
 cp "$ROOT/app/Info.plist" "$APP/Contents/Info.plist"
+cp "$ROOT/app/Resources/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
 cp "$ROOT"/engine/*.py "$ROOT/engine/requirements.txt" "$APP/Contents/Resources/engine/"
 
 # Ad-hoc signature with the default (code-hash) requirement: privacy grants

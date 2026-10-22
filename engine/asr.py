@@ -60,7 +60,8 @@ class Recognizer:
 
     beams = 1  # >1 switches decoding to beam search
 
-    def transcribe(self, audio: np.ndarray, language: str | None = None, beams: int | None = None) -> tuple[str, float]:
+    def transcribe(self, audio: np.ndarray, language: str | None = None, beams: int | None = None,
+                   should_stop=None) -> tuple[str, float]:
         """`language` (e.g. "Chinese") skips auto-detection. Chinese mode keeps English
         words in English, so it is the right lock for mixed speech: without it, a
         segment that starts with an English word can come back translated to English."""
@@ -75,9 +76,8 @@ class Recognizer:
         text_emb = self.model.model.embed_tokens(mx.array(suffix_ids))
         embeds = mx.concatenate([head_emb, audio_emb.astype(text_emb.dtype), text_emb], axis=0)
         beams = self.beams if beams is None else beams
-        if beams > 1:
-            out = self._beam_search(embeds, n_audio, beams)
-        else:
+        out = self._beam_search(embeds, n_audio, beams, should_stop) if beams > 1 else None
+        if out is None:  # greedy, or the beam search gave way to a key release
             out = self._greedy(embeds, n_audio)
         text = _LANG_TAG.sub("", self.tok.decode(out))
         if self._leak:
@@ -121,7 +121,7 @@ class Recognizer:
             y = nxt
         return out
 
-    def _beam_search(self, embeds, n_audio: int, beams: int) -> list[int]:
+    def _beam_search(self, embeds, n_audio: int, beams: int, should_stop=None) -> list[int] | None:
         """Keeps `beams` hypotheses; picks the best by log-probability with a mild
         length normalisation. The prompt is prefilled once, then the cache is repeated
         across beams and reordered every step."""
@@ -139,6 +139,8 @@ class Recognizer:
         finished: list[tuple[float, list[int]]] = []
         norm = lambda sc, n: sc / (((5 + n) / 6) ** 0.6)
         for _ in range(64 + n_audio * 2):
+            if should_stop and should_stop():
+                return None  # the user is waiting: finish this segment greedily instead
             alive = [i for i, s in enumerate(seqs) if s[-1] not in self.eos]
             for i in range(len(seqs)):
                 if seqs[i][-1] in self.eos:

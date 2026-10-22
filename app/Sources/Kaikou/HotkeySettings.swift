@@ -40,9 +40,14 @@ final class HotkeyRecorder: ObservableObject {
     }
 
     func reset() {
-        var d = HotkeySpec.default
-        d.mode = spec.mode
-        finish(d)
+        finish(HotkeySpec.default)
+    }
+
+    func setDoubleTap(_ on: Bool) {
+        guard spec.keyCode == nil else { return }
+        spec.doubleTap = on
+        if on { spec.mode = .toggle }
+        spec.save()
     }
 
     private func handle(_ e: NSEvent) {
@@ -51,7 +56,7 @@ final class HotkeyRecorder: ObservableObject {
             let bits = HotkeySpec.deviceBits(e.modifierFlags)
             peak |= bits
             if bits == 0 && peak != 0 {
-                finish(HotkeySpec(modifiers: peak, keyCode: nil, keyName: nil, mode: spec.mode))
+                finish(HotkeySpec(modifiers: peak, keyCode: nil, keyName: nil, mode: spec.mode, doubleTap: spec.doubleTap))
             }
         case .keyDown:
             let mods = e.modifierFlags.intersection([.control, .option, .shift, .command])
@@ -92,13 +97,17 @@ struct SettingsView: View {
                     .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
                 Button(recorder.recording ? "录制中…" : "录制新快捷键") { recorder.start() }
                     .disabled(recorder.recording)
-                Button("恢复默认（左⌃ 左⇧）") { recorder.reset() }
+                Button("恢复默认（双击 fn）") { recorder.reset() }
             }
             Picker("用法", selection: Binding(get: { recorder.spec.mode }, set: { recorder.setMode($0) })) {
                 Text("按一下开始，再按一下结束").tag(HotkeySpec.Mode.toggle)
                 Text("按住说话，松开结束").tag(HotkeySpec.Mode.hold)
             }
             .pickerStyle(.radioGroup)
+            .disabled(recorder.spec.isDoubleTap)
+            Toggle("按两下触发（连按两下开始，再按一下结束）", isOn: Binding(get: { recorder.spec.isDoubleTap },
+                                                         set: { recorder.setDoubleTap($0) }))
+                .disabled(recorder.spec.keyCode != nil)
             if let m = recorder.message {
                 Text(m).foregroundStyle(m.hasPrefix("不能") ? .red : .secondary)
             }
@@ -106,6 +115,7 @@ struct SettingsView: View {
                 Text("可以录：两个及以上修饰键的组合（如 左⌃ 左⇧、⌥⌘），右边的单个修饰键（如 右⌥），fn，或修饰键加一个键（如 ⌥Space、⌃`）。")
                 Text("修饰键加普通键的组合会被 Kaikou 独占，不再输入到其他 App。录音时随时按 Esc 取消。")
                 Text("备用快捷键 ⌃⌥Space（按住说话）始终可用，不需要辅助功能权限。")
+                Text("用 fn 时：如果系统设置里打开了 macOS 自带的听写并且它的快捷键也是 fn，两者会冲突，可以把系统听写关掉或换键。")
             }
             .font(.caption).foregroundStyle(.secondary)
             Spacer()

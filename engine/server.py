@@ -33,10 +33,12 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from config import load_config  # noqa: E402
 from lexicon import Lexicon, learned_path, record_learned  # noqa: E402
+import maintenance  # noqa: E402
 from pipeline import Pipeline  # noqa: E402
 from segmenter import Segmenter  # noqa: E402
 
 log = logging.getLogger("kaikou")
+LOG_DIR = os.path.expanduser("~/Library/Logs/Kaikou")
 
 
 class Session:
@@ -82,6 +84,7 @@ class Server:
         self.loop: asyncio.AbstractEventLoop | None = None
         self.last_gpu = time.time()
         self._finishing: set[asyncio.Task] = set()
+        self._maintained: dt.date | None = None
 
     # ---------- GPU queue ----------
 
@@ -146,6 +149,21 @@ class Server:
             await asyncio.sleep(3)
             p = self.pipeline
             if not p or not self.ready or self.sessions or self.pending:
+                continue
+            today = dt.date.today()
+            if self._maintained != today and maintenance.due(self.support, today):
+                self._maintained = today             # once a day, even if it fails
+                try:
+                    r = maintenance.run_daily(self.support, self.cfg, LOG_DIR)
+                    log.info("daily maintenance: %d audio file(s) removed (%.1f MB), %d learned fix(es) dropped",
+                             r["audio_removed"], r["freed_mb"], r["learned_removed"])
+                except Exception:
+                    log.exception("daily maintenance failed")
+                continue
+            # Keep the models resident: on this machine macOS pages them out after a few
+            # idle minutes, and the next dictation then waited ~3 s for them.
+            if time.time() - self.last_gpu > self.cfg.get("keep_warm_s", 45):
+                self.submit(self._touch)
                 continue
             try:
                 if p.lexicon_changed(self.lexicon_path):

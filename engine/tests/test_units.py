@@ -193,6 +193,11 @@ class FillerTest(unittest.TestCase):
     def test_clean(self):
         self.assertEqual(clean_fillers("我我在想，呃，然后然后这这这个看看"), "我在想，然后这个看看")
         self.assertEqual(clean_fillers("试试看，刚刚好"), "试试看，刚刚好")
+        self.assertEqual(clean_fillers("你看看我最近又呃那啥，又又说了一些话"), "你看看我最近又说了一些话")
+        self.assertEqual(clean_fillers("把整个整个 APP 改名，refer 到 thread thread 里"), "把整个 APP 改名，refer 到 thread 里")
+        self.assertEqual(clean_fillers("一个一个处理，谢谢谢谢"), "一个一个处理，谢谢谢谢")
+        self.assertEqual(clean_fillers("嗯"), "嗯")
+        self.assertEqual(clean_fillers("那啥东西你放哪了"), "那啥东西你放哪了")
 
 
 class AcronymTest(unittest.TestCase):

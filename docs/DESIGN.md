@@ -168,15 +168,24 @@ Everything stays on the machine. Personal data — the vocabulary (colleague nam
 internal service names), example pairs, history and audio — lives in
 `~/Library/Application Support/Kaikou/`, never in this public repository.
 
-## Hotkey (originally Right Option; changed at the user's request)
+## Hotkey
 
-Right Option (⌥), chosen because it is free on this machine (Typeless uses
-Left Ctrl+`, VoiceInk Ctrl+Tab) and is a single key.
+Default: double-tap fn to start, tap fn once to finish (hands-free toggle). A tap is
+fn down and up within 0.35 s with no other key in between; two taps must be within
+0.45 s. Holding fn or using it as a modifier (fn+F1) never triggers. Esc cancels.
 
-- Hold to talk, release to insert.
-- Tap once for hands-free; tap again to insert.
-- Esc cancels. Pressing another key within 1 s of pressing ⌥ is treated as a normal
-  Option shortcut and silently cancels.
+The hotkey is configurable in the panel (any modifier chord, a single right-side
+modifier, fn, or modifier + key via Carbon `RegisterEventHotKey`; toggle or hold;
+optional double-tap for modifier-only keys). ⌃⌥Space hold is a fallback that needs no
+permission and leaves the text on the clipboard.
+
+## Daily maintenance
+
+Once a day, at the first idle moment, `engine/maintenance.py` deletes audio older than
+30 days (text history stays), drops learned corrections that were made once and not
+seen for 60 days, settles conflicting ones (same source fixed two ways, or A→B and
+B→A) in favour of the more frequent, trims logs over 5 MB, and writes counts only to
+`maintenance.json`, which the panel summarises.
 
 ## Open risks
 

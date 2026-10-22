@@ -15,6 +15,9 @@ DEFAULTS = {
     "background_beams": 4,
     "segment": {"min_segment_s": 16.0, "max_segment_s": 28.0, "min_pause_s": 0.45},
     "keep_history": True,
+    "keep_warm_s": 45,
+    "audio_keep_days": 30,        # recorded audio; the text history is kept
+    "learned_stale_days": 60,     # one-off corrections that never came back
 }
 
 

@@ -20,8 +20,12 @@ struct HotkeySpec: Codable, Equatable {
     var keyCode: UInt16?
     var keyName: String?
     var mode: Mode
+    /// Modifier-only specs: two quick presses start (a single press then finishes).
+    var doubleTap: Bool? = nil
+    var isDoubleTap: Bool { doubleTap == true && keyCode == nil }
 
-    static let `default` = HotkeySpec(modifiers: Bits.leftControl | Bits.leftShift, keyCode: nil, keyName: nil, mode: .toggle)
+    /// Default: press fn twice to start, press fn once to finish.
+    static let `default` = HotkeySpec(modifiers: Bits.fn, keyCode: nil, keyName: nil, mode: .toggle, doubleTap: true)
     static let changed = Notification.Name("KaikouHotkeyChanged")
     private static let defaultsKey = "hotkeySpec"
 
@@ -70,7 +74,8 @@ struct HotkeySpec: Codable, Equatable {
             if f.contains(.command) { s += "⌘" }
             return s + (keyName ?? "键\(keyCode)")
         }
-        return Bits.names.filter { modifiers & $0.0 != 0 }.map(\.1).joined(separator: " ")
+        let keys = Bits.names.filter { modifiers & $0.0 != 0 }.map(\.1).joined(separator: " ")
+        return isDoubleTap ? "双击 \(keys)" : keys
     }
 
     var hint: String {
@@ -78,7 +83,11 @@ struct HotkeySpec: Codable, Equatable {
     }
 
     var help: String {
-        mode == .toggle ? "按一下 \(display) 开始说话，再按一下结束；Esc 取消" : "按住 \(display) 说话，松开结束；Esc 取消"
+        if isDoubleTap {
+            let key = display.replacingOccurrences(of: "双击 ", with: "")
+            return "连按两下 \(key) 开始说话，再按一下 \(key) 结束；Esc 取消"
+        }
+        return mode == .toggle ? "按一下 \(display) 开始说话，再按一下结束；Esc 取消" : "按住 \(display) 说话，松开结束；Esc 取消"
     }
 
     /// Why a recorded spec is unsafe, or nil if it is fine.

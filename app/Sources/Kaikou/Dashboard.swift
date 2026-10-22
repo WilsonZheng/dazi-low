@@ -143,7 +143,7 @@ struct Stats {
 func summaryText(records: [DictationRecord], learned: [LearnedItem]) -> String {
     let cal = Calendar.current
     let week = records.filter { $0.date > cal.date(byAdding: .day, value: -7, to: Date())! }
-    guard !week.isEmpty else { return "这周还没有听写记录。按住右侧 ⌥ 说话试试。" }
+    guard !week.isEmpty else { return "这周还没有听写记录。" + HotkeySpec.load().help + "。" }
     let s = Stats(week)
     var lines = ["这周你口述了 \(s.count) 次，共 \(s.chars) 字，录音 \(String(format: "%.0f", s.minutes)) 分钟，估计少打了 \(String(format: "%.0f", s.savedMinutes)) 分钟的字。"]
     let byApp = Dictionary(grouping: week, by: \.app).mapValues(\.count).sorted { $0.value > $1.value }
@@ -159,7 +159,21 @@ func summaryText(records: [DictationRecord], learned: [LearnedItem]) -> String {
     } else {
         lines.append("还没有学到纠错：识别错了就直接在输入框里改掉，Kaikou 会记住。")
     }
+    if let m = maintenanceLine() { lines.append(m) }
     return lines.joined(separator: "\n")
+}
+
+/// The engine's daily cleanup report (maintenance.json), as one sentence.
+func maintenanceLine() -> String? {
+    let url = Paths.support.appendingPathComponent("maintenance.json")
+    guard let o = (try? JSONSerialization.jsonObject(with: Data(contentsOf: url))) as? [String: Any],
+          let date = o["date"] as? String else { return nil }
+    let audio = o["audio_removed"] as? Int ?? 0
+    let learned = o["learned_removed"] as? Int ?? 0
+    var parts: [String] = []
+    if audio > 0 { parts.append("删掉了 \(audio) 段 30 天前的录音（\(o["freed_mb"] as? Double ?? 0) MB，文字记录保留）") }
+    if learned > 0 { parts.append("清理了 \(learned) 条过时或互相冲突的纠错") }
+    return "自我整理（\(date)）：" + (parts.isEmpty ? "检查过了，没有需要清理的。" : parts.joined(separator: "，") + "。")
 }
 
 // MARK: - Views

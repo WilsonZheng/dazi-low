@@ -25,12 +25,16 @@ _DOTTED = re.compile(r"\b((?:[A-Z]\.){2,})")
 _SPACED = re.compile(r"(?<![A-Za-z])([A-Z](?: [A-Z]){1,5})(?![A-Za-z])")
 
 
-_FILLER = re.compile(r"[呃嗯额]+[，,、]?\s*")
-# Stutters on function words only; real reduplication (看看, 试试, 刚刚) is left alone.
-_STUTTER = re.compile(r"([我你他她它这那的了去给就是在把有要])\1+")
-_REPEAT = re.compile(r"(然后|反正|就是|那个|这个|所以|但是)(?:[，,]?\s*\1)+")
-
-
+_FILLER = re.compile(r"[呃嗯额]+[，,、]?\s*|啊{2,}[，,、]?\s*")
+_FILLER_PHRASE = re.compile(r"(?:呃|嗯)?那啥[，,、]\s*")
+# Stutters on single function characters ("又又", "我我"); real reduplication
+# (看看, 试试, 刚刚) uses other characters and is left alone.
+_STUTTER = re.compile(r"([我你他她它这那的了去给就是在把有要又都也还再会能])\1+")
+# Repeated words: "整个整个", "什么什么", "thread thread", "appointment appointment".
+# "一个一个" (one by one) is kept.
+_REPEAT_CJK = re.compile(r"((?!一个)[\u3400-\u9fff]{2,4})(?:[，,]?\s*\1)+")
+_REPEAT_LATIN = re.compile(r"\b([A-Za-z][A-Za-z0-9_-]{1,})(?:\s+\1\b)+", re.I)
+_KEEP_DOUBLE = {"看看", "试试", "想想", "谢谢", "刚刚", "常常", "慢慢", "天天", "好好", "人人", "多多", "渐渐", "偷偷", "悄悄"}
 _SENTENCE_END = re.compile(r"[。！？!?]|\.(?=\s)")
 _CLAUSE_END = re.compile(r"[，,；;]")
 _LIST_ITEM = re.compile(r"^(\d+)\.\s")
@@ -120,10 +124,16 @@ def context_terms(context: str, transcript: str, limit: int = 20) -> set[str]:
 
 
 def clean_fillers(text: str) -> str:
-    """Deterministic cleanup for text that skipped the post-editor."""
+    """Deterministic last pass on every result: fillers and stutters the post-editor
+    missed. Conservative on purpose; anything that can be meaningful is kept."""
+    if len(text.strip()) <= 2:
+        return text  # a lone "嗯" can be a real answer
     text = _FILLER.sub("", text)
-    text = _REPEAT.sub(r"\1", text)
-    return _STUTTER.sub(r"\1", text)
+    text = _FILLER_PHRASE.sub("", text)
+    text = _REPEAT_CJK.sub(lambda m: m.group(1) if m.group(1) not in _KEEP_DOUBLE else m.group(0), text)
+    text = _REPEAT_LATIN.sub(r"\1", text)
+    text = _STUTTER.sub(r"\1", text)
+    return re.sub(r"^[，,、\s]+", "", text)
 
 
 def collapse_acronyms(text: str) -> str:
@@ -188,7 +198,9 @@ class Pipeline:
         if self.polisher:
             probe = mx.array(self.polisher.tok.encode("你好", add_special_tokens=False))[None]
             mx.eval(self.polisher.model(probe, cache=self.polisher._fresh_cache()))
-        log.info("models touched in %.2fs", time.perf_counter() - t)
+        took = time.perf_counter() - t
+        if took > 1:
+            log.info("models touched in %.2fs (they had been paged out)", took)
 
     # ---------- while recording ----------
 
@@ -200,9 +212,10 @@ class Pipeline:
         # Beam search here costs nothing the user waits for: segments are recognized while
         # they are still talking. The tail after release stays greedy.
         beams = self.cfg.get("background_beams", 1)
-        text, secs = self.asr.transcribe(audio, beams=beams)
+        released = lambda: getattr(session, "ended", False)
+        text, secs = self.asr.transcribe(audio, beams=beams, should_stop=released)
         if session.lang == "Chinese" and text and not _CJK.search(text):
-            text, more = self.asr.transcribe(audio, language="Chinese", beams=beams)
+            text, more = self.asr.transcribe(audio, language="Chinese", beams=beams, should_stop=released)
             secs += more
         if session.lang is None and text.strip():
             session.lang = session_language(text)
@@ -241,7 +254,7 @@ class Pipeline:
                 t["minimal_rejected"] = t.get("minimal_rejected", 0) + 1
                 return clean_fillers(fixed)
             return clean_fillers(self.lexicon.apply(r.text))
-        return self.lexicon.apply(r.text)
+        return clean_fillers(self.lexicon.apply(r.text))
 
     def advance_chunks(self, session, should_stop=None) -> None:
         """Edits the finished part of the recording while the user keeps talking: every
